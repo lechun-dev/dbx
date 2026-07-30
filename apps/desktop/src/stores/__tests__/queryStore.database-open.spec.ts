@@ -56,6 +56,22 @@ describe("queryStore database open state", () => {
     expect(tab?.objectBrowser?.viewport).toBeUndefined();
   });
 
+  it("restores the table filter when an existing object browser is opened from the tables group", async () => {
+    const { useQueryStore } = await import("@/stores/queryStore");
+    const store = useQueryStore();
+
+    const tabId = store.openObjectBrowser("pg-1", "app", "public");
+    const reopenedTabId = store.openObjectBrowser("pg-1", "app", "public", undefined, "tables");
+    const tab = store.tabs.find((item) => item.id === tabId);
+
+    expect(reopenedTabId).toBe(tabId);
+    expect(tab?.objectBrowser?.objectType).toBe("tables");
+    expect(tab?.objectBrowser?.filterRequestId).toBe(1);
+
+    store.openObjectBrowser("pg-1", "app", "public", undefined, "tables");
+    expect(tab?.objectBrowser?.filterRequestId).toBe(2);
+  });
+
   it("keeps external catalog object browsers isolated", async () => {
     const { useQueryStore } = await import("@/stores/queryStore");
     const store = useQueryStore();

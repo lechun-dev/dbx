@@ -120,7 +120,7 @@ async function openTableTarget(target: NavigationTarget, options: { tableInfoTab
         limit: pageLimit,
       });
       if (!isPreparationCurrent()) return;
-      queryStore.updateSql(tabId, sql);
+      queryStore.updateDataSql(tabId, sql, "table");
       queryStore.setTableMeta(tabId, {
         catalog: target.catalog,
         database: target.database,
@@ -146,7 +146,7 @@ async function openTableTarget(target: NavigationTarget, options: { tableInfoTab
       limit: pageLimit,
     });
     if (!isPreparationCurrent()) return;
-    queryStore.updateSql(tabId, sql);
+    queryStore.updateDataSql(tabId, sql, "table");
     queryStore.setTableMeta(tabId, {
       schema: tableSchema,
       catalog: target.catalog,
@@ -189,7 +189,7 @@ async function openTableTarget(target: NavigationTarget, options: { tableInfoTab
         limit: 0,
       });
       if (!isCurrentTarget()) return;
-      queryStore.updateSql(tabId, emptySql);
+      queryStore.updateDataSql(tabId, emptySql, "table");
       await queryStore.executeTabSql(tabId, emptySql, { pagination: { limit: pageLimit, offset: 0 } });
       if (!isCurrentTarget()) return;
     }
@@ -236,7 +236,7 @@ async function openTableTarget(target: NavigationTarget, options: { tableInfoTab
           limit: pageLimit,
         });
         if (!isCurrentTarget()) return;
-        queryStore.updateSql(tabId, newSql);
+        queryStore.updateDataSql(tabId, newSql, "table");
         await queryStore.executeTabSql(tabId, newSql, { pagination: { limit: pageLimit, offset: 0 } });
       }
     } catch (reason) {

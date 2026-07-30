@@ -57,4 +57,21 @@ describe("openTabsPersistence originalSql round-trip", () => {
     expect(restored.database).toBe("dbx_catalog_completion");
     expect(restored.catalog).toBe("dbx_mysql_catalog");
   });
+
+  it("preserves custom SQL mode for data tabs and defaults older data tabs to table mode", () => {
+    const [restoredCustom] = roundTrip([
+      queryTab({
+        mode: "data",
+        sql: "SELECT * FROM users JOIN orders ON orders.user_id = users.id",
+        dataSqlMode: "custom",
+      }),
+    ]);
+    const [restoredLegacy] = restoreOpenTabsPayload({
+      tabs: [{ id: "t2", title: "users", connectionId: "c1", database: "db", mode: "data", sql: "SELECT * FROM users" }],
+      activeTabId: "t2",
+    }).tabs;
+
+    expect(restoredCustom.dataSqlMode).toBe("custom");
+    expect(restoredLegacy.dataSqlMode).toBe("table");
+  });
 });

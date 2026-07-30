@@ -1178,6 +1178,7 @@ export const useQueryStore = defineStore("query", () => {
       isCancelling: false,
       isExplaining: false,
       mode,
+      dataSqlMode: mode === "data" ? "table" : undefined,
     };
     if (mode === "query") tab.originalSql = initialSql ?? "";
     tabs.value.push(tab);
@@ -1246,10 +1247,19 @@ export const useQueryStore = defineStore("query", () => {
     return id;
   }
 
-  function openObjectBrowser(connectionId: string, database: string, schema?: string, catalog?: string) {
+  function openObjectBrowser(connectionId: string, database: string, schema?: string, catalog?: string, objectType?: "tables") {
     const title = catalog ? `${catalog}.${database} objects` : schema ? `${schema} objects` : `${database} objects`;
     const existing = tabs.value.find((tab) => tab.mode === "objects" && tab.connectionId === connectionId && tab.database === database && (tab.objectBrowser?.catalog || "") === (catalog || "") && (tab.objectBrowser?.schema || "") === (schema || ""));
     if (existing) {
+      if (objectType) {
+        // 2026-07-30 coder(lq): Incrementing the request lets a repeated sidebar
+        // navigation restore the table filter after the user viewed another object type.
+        existing.objectBrowser = {
+          ...existing.objectBrowser,
+          objectType,
+          filterRequestId: (existing.objectBrowser?.filterRequestId ?? 0) + 1,
+        };
+      }
       switchTab(existing.id);
       return existing.id;
     }
@@ -1269,7 +1279,8 @@ export const useQueryStore = defineStore("query", () => {
       objectBrowser: {
         catalog,
         schema,
-        objectType: "tables",
+        objectType,
+        filterRequestId: objectType ? 1 : undefined,
       },
     };
     tabs.value.push(tab);
@@ -1977,6 +1988,7 @@ export const useQueryStore = defineStore("query", () => {
       isExplaining: false,
       explainExecutionId: undefined,
       mode: original.mode,
+      dataSqlMode: original.dataSqlMode,
       mqTenant: original.mqTenant,
       mqInitialTab: original.mqInitialTab,
       nacosNamespace: original.nacosNamespace,
@@ -2070,6 +2082,15 @@ export const useQueryStore = defineStore("query", () => {
   async function refreshDataTabInternal(id: string, options?: { supersedeBusy?: boolean; propagateBuildError?: boolean }): Promise<boolean> {
     const tab = tabs.value.find((candidate) => candidate.id === id);
     if (!tab || tab.mode !== "data" || (tab.isExecuting && !options?.supersedeBusy)) return false;
+    if (tab.dataSqlMode === "custom") {
+      const sql = tab.resultBaseSql?.trim() || tab.lastExecutedSql?.trim() || tab.sql.trim();
+      if (!sql) return false;
+      await executeTabSql(tab.id, sql, {
+        resultBaseSql: sql,
+        preserveResultDuringExecution: true,
+      });
+      return true;
+    }
     const tableMeta = tableMetaForDataTab(tab);
     if (!tableMeta?.tableName) return false;
 
@@ -2107,7 +2128,7 @@ export const useQueryStore = defineStore("query", () => {
       if (!sql.trim()) throw new Error("Failed to build table refresh SQL");
       const current = tabs.value.find((candidate) => candidate.id === id);
       if (!current || current.executionId !== refreshPreparationId) return false;
-      updateSql(tab.id, sql);
+      updateDataSql(tab.id, sql, "table");
       await executeTabSql(tab.id, sql, {
         pagination: { limit, offset },
         preserveResultDuringExecution: true,
@@ -2181,6 +2202,14 @@ export const useQueryStore = defineStore("query", () => {
       tab.sql = sql;
       queueSavedSqlEditorPositionPersist(tab);
     }
+  }
+
+  function updateDataSql(id: string, sql: string, mode: NonNullable<QueryTab["dataSqlMode"]>) {
+    const tab = tabs.value.find((item) => item.id === id);
+    if (!tab || tab.mode !== "data") return;
+    tab.sql = sql;
+    tab.dataSqlMode = mode;
+    queueSavedSqlEditorPositionPersist(tab);
   }
 
   function updateDataGridLocalColumnFilters(id: string, filters: Record<string, string[]>) {
@@ -2568,6 +2597,16 @@ export const useQueryStore = defineStore("query", () => {
     if (!activeTabId.value) return;
     const tab = tabs.value.find((item) => item.id === activeTabId.value);
     if (tab?.mode === "query") {
+      tab.resultSortColumn = undefined;
+      tab.resultSortColumnIndex = undefined;
+      tab.resultSortDirection = undefined;
+      tab.resultSortMode = undefined;
+      tab.resultSortedSql = undefined;
+    } else if (tab?.mode === "data") {
+      // 2026-07-30 coder(lq): SQL executed from the data-page editor is detached from the original table editing target.
+      tab.dataSqlMode = "custom";
+      tab.whereInput = undefined;
+      tab.orderByInput = undefined;
       tab.resultSortColumn = undefined;
       tab.resultSortColumnIndex = undefined;
       tab.resultSortDirection = undefined;
@@ -3663,6 +3702,23 @@ export const useQueryStore = defineStore("query", () => {
         pageOffset = plan.pageOffset;
         countSql = plan.countSql;
         useAgentResultSession = plan.useAgentResultSession;
+      } else if (tab.mode === "data" && tab.dataSqlMode === "custom") {
+        // 2026-07-30 coder(lq): Custom SQL in a data tab uses query pagination without inheriting the original table's edit metadata.
+        const pagination = options?.pagination ?? { limit: settingsStore.editorSettings.pageSize, offset: 0 };
+        const plan = await api.prepareQueryPaginationExecutionPlan({
+          sql: sqlToExecute,
+          queryBaseSql,
+          databaseType: effectiveDbType,
+          pagination,
+          useAgentCursor,
+          firstPageUsesActualSql: false,
+        });
+        sqlToExecute = plan.sqlToExecute;
+        pageSql = plan.pageSql;
+        pageLimit = plan.pageLimit;
+        pageOffset = plan.pageOffset;
+        countSql = plan.countSql;
+        useAgentResultSession = plan.useAgentResultSession;
       } else if (tab.mode === "data") {
         pageLimit = options?.pagination?.limit ?? tableOpenPageLimit(settingsStore.editorSettings.tableOpenPageSize);
         pageOffset = options?.pagination?.offset ?? 0;
@@ -3802,7 +3858,7 @@ export const useQueryStore = defineStore("query", () => {
         const resultRowCount = current.result?.rows.length ?? 0;
         const totalKnownFromIncompletePage = !!current.result && typeof exactTotalFromIncompletePage(current.result, pageLimit, pageOffset, useAgentResultSession) === "number";
         const dataCountTarget =
-          current.mode === "data"
+          current.mode === "data" && current.dataSqlMode !== "custom"
             ? (() => {
                 const tableMeta = tableMetaForDataTab(current);
                 if (!tableMeta?.tableName) return undefined;
@@ -3817,7 +3873,13 @@ export const useQueryStore = defineStore("query", () => {
                 };
               })()
             : undefined;
-        const canAutoCalculateTotalRows = !options?.appendResult && !!current.result && resultRowCount > 0 && !totalKnownFromIncompletePage && settingsStore.editorSettings.autoCalculateTotalRows && ((current.mode === "query" && !!countSql) || (current.mode === "data" && !!dataCountTarget));
+        const canAutoCalculateTotalRows =
+          !options?.appendResult &&
+          !!current.result &&
+          resultRowCount > 0 &&
+          !totalKnownFromIncompletePage &&
+          settingsStore.editorSettings.autoCalculateTotalRows &&
+          ((current.mode === "query" && !!countSql) || (current.mode === "data" && (current.dataSqlMode === "custom" ? !!countSql : !!dataCountTarget)));
         current.resultTotalRowCountLoading = canAutoCalculateTotalRows;
         // Server-side pagination without a countSql: the backend (currently
         // the Elasticsearch driver) already reports the true match total via
@@ -4602,7 +4664,7 @@ export const useQueryStore = defineStore("query", () => {
     const tab = tabs.value.find((t) => t.id === id);
     if (!tab?.result) return undefined;
 
-    if (tab.mode === "data") {
+    if (tab.mode === "data" && tab.dataSqlMode !== "custom") {
       const connStore = useConnectionStore();
       await connStore.ensureConnected(tab.connectionId);
       const conn = connStore.getConfig(tab.connectionId);
@@ -4897,6 +4959,7 @@ export const useQueryStore = defineStore("query", () => {
     rollbackConnectionTransactions,
     rollbackDatabaseTransactions,
     updateSql,
+    updateDataSql,
     updateDataGridLocalColumnFilters,
     updateDataGridHiddenColumnKeys,
     updateEditorViewport,

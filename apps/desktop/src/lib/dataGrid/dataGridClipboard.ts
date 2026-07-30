@@ -59,3 +59,12 @@ export function planDataGridPaste(rows: readonly (readonly (string | null)[])[],
   });
   return cells;
 }
+
+export function dataGridPasteRowsToAppend(clipboardRowCount: number, startRowIndex: number, displayRowCount: number, hasTrailingDraftRow: boolean): number {
+  if (clipboardRowCount <= 0 || startRowIndex < 0) return 0;
+  // 2026-07-30 coder(lq): The quick-entry draft disappears as soon as pending rows are added,
+  // so it must not be counted as stable paste capacity.
+  const stableDisplayRowCount = Math.max(0, displayRowCount - (hasTrailingDraftRow ? 1 : 0));
+  const availableRowCount = Math.max(0, stableDisplayRowCount - startRowIndex);
+  return Math.max(0, clipboardRowCount - availableRowCount);
+}

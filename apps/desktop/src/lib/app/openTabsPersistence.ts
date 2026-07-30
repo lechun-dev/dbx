@@ -37,6 +37,7 @@ export interface SavedOpenTab {
   resultPageLimit?: number;
   resultPageOffset?: number;
   whereInput?: string;
+  dataSqlMode?: QueryTab["dataSqlMode"];
   pinned?: boolean;
   mode?: QueryTab["mode"];
   mqTenant?: string;
@@ -105,6 +106,7 @@ export function serializeOpenTabs(tabs: QueryTab[]): SavedOpenTab[] {
     ...(tab.resultPageLimit !== undefined ? { resultPageLimit: tab.resultPageLimit } : {}),
     ...(tab.resultPageOffset !== undefined ? { resultPageOffset: tab.resultPageOffset } : {}),
     ...(tab.whereInput !== undefined ? { whereInput: tab.whereInput } : {}),
+    ...(tab.mode === "data" && tab.dataSqlMode === "custom" ? { dataSqlMode: "custom" as const } : {}),
     pinned: tab.pinned,
     mode: tab.mode,
     ...(tab.mqTenant !== undefined ? { mqTenant: tab.mqTenant } : {}),
@@ -167,6 +169,7 @@ function restoreOpenTabsArray(parsed: unknown, rawActiveTabId: string | null, op
       return {
         ...tab,
         mode,
+        dataSqlMode: mode === "data" ? (tab.dataSqlMode === "custom" ? "custom" : "table") : undefined,
         sql: typeof tab.sql === "string" ? tab.sql : "",
         isExecuting: false,
         isCancelling: false,

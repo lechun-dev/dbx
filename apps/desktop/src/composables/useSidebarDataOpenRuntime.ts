@@ -130,6 +130,7 @@ export function useSidebarDataOpenRuntime() {
     const resetReusedDataTabState = (tab: (typeof queryStore.tabs)[number]) => {
       tab.title = node.label;
       tab.schema = tableSchema;
+      tab.dataSqlMode = "table";
       tab.whereInput = undefined;
       tab.orderByInput = undefined;
       tab.previewSql = undefined;
@@ -330,7 +331,7 @@ export function useSidebarDataOpenRuntime() {
         elapsed: elapsed(),
       });
       logPhase("sql-built", { tabId, columnCount: columns.length, primaryKeyCount: primaryKeys.length });
-      queryStore.updateSql(tabId, sql);
+      queryStore.updateDataSql(tabId, sql, "table");
       logPhase("sql-updated", { tabId });
 
       openDataLog("info", "execute:start", { traceId, tabId, elapsed: elapsed() });

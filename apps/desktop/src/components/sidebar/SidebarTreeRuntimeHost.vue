@@ -699,10 +699,12 @@ function runRowClickAction(clickDetail: number) {
     openMongoTreeData(node);
     return;
   }
-  const action = treeNodeRowAction(node.type, canExpand.value, settingsStore.editorSettings.sidebarActivation);
+  const action = treeNodeRowAction(node.type, canExpand.value, settingsStore.editorSettings.sidebarActivation, canOpenObjectBrowser.value);
   if (!shouldRunTreeNodeRowAction(action, clickDetail)) return;
   if (action === "open-data") {
     scheduleOpenData(node);
+  } else if (action === "open-object-browser") {
+    void openObjectBrowser("tables");
   } else if (action === "open-source") {
     openObjectSourceDialog(false);
   } else if (isDocumentBrowserTreeNode(node.type)) {
@@ -945,9 +947,9 @@ function onDoubleClick(event: MouseEvent) {
   if (dataTabOpenModeFromTreeClick(activeNode.value.type, event, settingsStore.editorSettings.shortcuts.openDataInNewTab) === "new-tab") return;
   const action = treeNodeRowDoubleClickAction(activeNode.value.type, canOpenObjectBrowser.value, settingsStore.editorSettings.sidebarActivation, canExpand.value);
   if (action === "open-object-browser") {
-    void openObjectBrowser();
+    void openObjectBrowser(activeNode.value.type === "group-tables" ? "tables" : undefined);
   } else if (action === "open-object-browser-and-expand") {
-    void openObjectBrowser();
+    void openObjectBrowser(activeNode.value.type === "group-tables" ? "tables" : undefined);
     if (!activeNode.value.isExpanded) void toggle();
   } else if (action === "open-data") {
     openDataImmediately(activeNode.value);
@@ -1015,7 +1017,7 @@ async function openSavedSqlFile() {
   void savedSqlStore.recordFileUsage(file.id);
 }
 
-async function openObjectBrowser() {
+async function openObjectBrowser(objectType?: "tables") {
   const node = activeNode.value;
   if (!node.connectionId) return;
   try {
@@ -1023,7 +1025,7 @@ async function openObjectBrowser() {
     connectionStore.activeConnectionId = node.connectionId;
 
     if (hasTreeNodeDatabaseContext(node)) {
-      queryStore.openObjectBrowser(node.connectionId, node.database, node.schema, node.catalog);
+      queryStore.openObjectBrowser(node.connectionId, node.database, node.schema, node.catalog, objectType);
       return;
     }
 
@@ -1032,7 +1034,7 @@ async function openObjectBrowser() {
     const options = await getDatabaseOptions(node.connectionId);
     const database = resolveDefaultDatabase(connection, options);
     if (database) {
-      queryStore.openObjectBrowser(node.connectionId, database);
+      queryStore.openObjectBrowser(node.connectionId, database, undefined, undefined, objectType);
     } else {
       await toggle();
     }

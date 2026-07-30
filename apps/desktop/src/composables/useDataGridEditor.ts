@@ -491,6 +491,11 @@ export function useDataGridEditor(options: UseDataGridEditorOptions) {
     preserveEmptyString?: boolean;
   }
 
+  interface PastedRowCell {
+    columnIndex: number;
+    value: string | null;
+  }
+
   function coerceCellValue(value: string, oldValue: CellValue | undefined, columnIndex: number, options: ApplyCellValueOptions = {}): CellValue {
     return coerceDataGridCellValue({
       value,
@@ -942,6 +947,40 @@ export function useDataGridEditor(options: UseDataGridEditorOptions) {
       if (el) el.scrollTop = el.scrollHeight;
       startEdit(rowId, initialEditColumn?.value ?? 0);
     });
+  }
+
+  function appendPastedRows(rows: readonly (readonly PastedRowCell[])[]): number {
+    if (rows.length === 0) return 0;
+    if (isBatching) {
+      if (!batchUndoSnapshotPushed) {
+        pushUndoSnapshot();
+        batchUndoSnapshotPushed = true;
+      }
+    } else {
+      pushUndoSnapshot();
+    }
+
+    const appendedRows = rows.map((cells) => {
+      const row = result.value.columns.map(() => null) as CellValue[];
+      for (const cell of cells) {
+        if (cell.columnIndex < 0 || cell.columnIndex >= row.length || !canEditColumn(cell.columnIndex)) continue;
+        row[cell.columnIndex] = cell.value === null ? null : coerceCellValue(cell.value, null, cell.columnIndex);
+      }
+      return row;
+    });
+
+    // 2026-07-30 coder(lq): Append the whole clipboard block atomically so filtering and
+    // quick-entry draft visibility cannot make later pasted rows lose their target.
+    rowStatusFilter.value = rowStatusFilterAfterAddingRow(rowStatusFilter.value);
+    newRows.value = [...newRows.value, ...appendedRows];
+    markBatchMutated();
+    if (useTransaction.value && !transactionActive.value) {
+      enterTransaction();
+    }
+    if (!isBatching) {
+      touchPendingChanges();
+    }
+    return appendedRows.length;
   }
 
   function clonedRowData(item: RowItem): CellValue[] {
@@ -1566,6 +1605,7 @@ export function useDataGridEditor(options: UseDataGridEditorOptions) {
     cancelEdit,
     onEditKeydown,
     addRow,
+    appendPastedRows,
     cloneRow,
     cloneRows,
     applyDeleteRows,

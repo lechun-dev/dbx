@@ -115,6 +115,13 @@ describe("normalizeEditorSettings", () => {
     expect(normalizeEditorSettings({ dataGridSearchMode: "invalid" as any }).dataGridSearchMode).toBe("filter");
   });
 
+  it("defaults to a soft alternating row color and clamps saved strength", () => {
+    expect(normalizeEditorSettings({}).dataGridStripeStrength).toBe(3);
+    expect(normalizeEditorSettings({ dataGridStripeStrength: 0 }).dataGridStripeStrength).toBe(0);
+    expect(normalizeEditorSettings({ dataGridStripeStrength: 8.6 }).dataGridStripeStrength).toBe(9);
+    expect(normalizeEditorSettings({ dataGridStripeStrength: 99 }).dataGridStripeStrength).toBe(16);
+  });
+
   it("defaults the global data grid copy extractor and preserves valid choices", () => {
     expect(normalizeEditorSettings({}).dataGridCopyExtractor).toBe("tsv");
     expect(normalizeEditorSettings({ dataGridCopyExtractor: "sql-updates" }).dataGridCopyExtractor).toBe("sql-updates");

@@ -36,6 +36,10 @@ describe("EDITOR_SETTINGS_DRAFT_KEYS", () => {
   it("includes the table-open page size", () => {
     expect(EDITOR_SETTINGS_DRAFT_KEYS).toContain("tableOpenPageSize");
   });
+
+  it("includes the alternating row color strength", () => {
+    expect(EDITOR_SETTINGS_DRAFT_KEYS).toContain("dataGridStripeStrength");
+  });
 });
 
 describe("editorSettingsDraftFromSettings", () => {

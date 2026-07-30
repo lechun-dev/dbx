@@ -138,7 +138,11 @@ export function tabTooltipLines(tab: QueryTab, t: Translate): { label: string; v
     lines.push({ label: t("tabs.tooltipFilePath"), value: tab.externalSqlPath });
   }
   if (tab.mode === "data" && tab.tableMeta?.tableName) {
+    if (tab.tableMeta.schema) {
+      lines.push({ label: t("tabs.tooltipSchema"), value: tab.tableMeta.schema });
+    }
     lines.push({ label: t("tabs.tooltipTable"), value: tab.tableMeta.tableName });
+    lines.push({ label: t("tabs.tooltipColumns"), value: String(tab.tableMeta.columns.length) });
   }
   if (tab.mode === "mongo" && tab.sql) {
     lines.push({ label: t("tabs.tooltipCollection"), value: tab.sql });

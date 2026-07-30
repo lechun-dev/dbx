@@ -224,6 +224,15 @@ const pendingCloseActionChoice = ref(false);
 
 const activeTab = computed(() => queryStore.tabs.find((t) => t.id === queryStore.activeTabId));
 
+function onEditorUpdate(tabId: string, sql: string) {
+  const tab = queryStore.tabs.find((item) => item.id === tabId);
+  if (tab?.mode === "data") {
+    queryStore.updateDataSql(tabId, sql, "custom");
+    return;
+  }
+  queryStore.updateSql(tabId, sql);
+}
+
 const activeConnection = computed(() => {
   const tab = activeTab.value;
   return tab ? connectionStore.getConfig(tab.connectionId) : undefined;
@@ -2295,7 +2304,7 @@ onUnmounted(() => {
                     @execute-in-new-result-tab="tryExecuteInNewResultTab($event)"
                     @cancel="cancelActiveExecution()"
                     @explain="tryExplain()"
-                    @editor-update="(tabId: string, v: string) => queryStore.updateSql(tabId, v)"
+                    @editor-update="onEditorUpdate"
                     @editor-selection-change="(v: string) => (selectedSql = v)"
                     @editor-cursor-change="(p: number) => (cursorPos = p)"
                     @editor-viewport-change="(tabId: string, viewport: { scrollTop: number; scrollLeft: number }) => queryStore.updateEditorViewport(tabId, viewport)"

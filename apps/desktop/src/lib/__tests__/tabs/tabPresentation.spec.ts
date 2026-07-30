@@ -8,6 +8,9 @@ const translations: Record<string, string> = {
   "tabs.tooltipConnection": "Connection:",
   "tabs.tooltipGroup": "Group:",
   "tabs.tooltipDatabase": "Database:",
+  "tabs.tooltipSchema": "Schema:",
+  "tabs.tooltipTable": "Table:",
+  "tabs.tooltipColumns": "Columns:",
   "connectionGroup.ungroupedLabel": "Ungrouped",
   "editor.noDatabase": "No database",
 };
@@ -167,6 +170,38 @@ describe("tab group presentation", () => {
     };
 
     expect(connectionGroupDisplayName("conn-1", translate)).toBe("Ungrouped");
+  });
+
+  it("includes all available table metadata in data tab tooltips", () => {
+    const store = useConnectionStore();
+    store.connections = [{ id: "conn-1", name: "PostgreSQL", db_type: "postgres", database: "app" } as ConnectionConfig];
+    store.sidebarLayout = {
+      groups: [],
+      order: [{ type: "connection", id: "conn-1" }],
+    };
+
+    expect(
+      tabTooltipLines(
+        queryTab({
+          database: "app",
+          mode: "data",
+          tableMeta: {
+            schema: "public",
+            tableName: "orders",
+            columns: [{ name: "id" }, { name: "status" }, { name: "created_at" }],
+            primaryKeys: ["id"],
+          },
+        }),
+        translate,
+      ),
+    ).toEqual([
+      { label: "Connection:", value: "PostgreSQL" },
+      { label: "Group:", value: "Ungrouped" },
+      { label: "Database:", value: "app" },
+      { label: "Schema:", value: "public" },
+      { label: "Table:", value: "orders" },
+      { label: "Columns:", value: "3" },
+    ]);
   });
 });
 

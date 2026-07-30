@@ -139,6 +139,7 @@ import { dataGridCountQueryOptions } from "@/lib/dataGrid/dataGridQueryOptions";
 import { dataGridBottomScrollTop, dataGridScrollPosition, isDataGridAtScrollBottom, isDataGridNearScrollBottom, shouldCheckInfiniteScrollAfterScroll, type DataGridScrollPosition } from "@/lib/dataGrid/dataGridInfiniteScroll";
 import { CANVAS_DATA_GRID_ROW_HEIGHT, canvasDataGridActionReservedWidth, dataGridSearchMatchKey, drawCanvasDataGrid } from "@/lib/dataGrid/canvasDataGridRenderer";
 import { DATA_GRID_DARK_ROW_NUMBER_BG, DATA_GRID_DARK_STRIPED_ROW_BG, DATA_GRID_LIGHT_STRIPED_ROW_BG, dataGridActiveRowBackground } from "@/lib/dataGrid/dataGridPaintTheme";
+import { dataGridStripeBackground } from "@/lib/dataGrid/dataGridStripe";
 import { createRowLowerTextCache } from "@/lib/dataGrid/dataGridRowLowerText";
 import { dataGridPreviewLabelKey, dataGridSaveActionMode, dataGridSaveToolbarState } from "@/lib/dataGrid/dataGridSaveUi";
 import type { QueryEditabilityReason } from "@/lib/sql/sqlAnalysis";
@@ -180,7 +181,7 @@ import {
 import { useToast } from "@/composables/useToast";
 import { useDataGridExport, type MongoCopyUpdateTarget } from "@/composables/useDataGridExport";
 import { eventTargetAllowsNativeClipboard, isPlainClipboardShortcut, readTextFromClipboard } from "@/lib/common/clipboard";
-import { claimDataGridPaste, clearDataGridClipboardCopy, parseDataGridClipboard, planDataGridPaste } from "@/lib/dataGrid/dataGridClipboard";
+import { claimDataGridPaste, clearDataGridClipboardCopy, dataGridPasteRowsToAppend, parseDataGridClipboard, planDataGridPaste } from "@/lib/dataGrid/dataGridClipboard";
 import { DATA_GRID_COPY_EXTRACTOR_DESCRIPTORS, DATA_GRID_COPY_EXTRACTOR_IDS, extractorUnavailableForDatabase, type DataGridCopyExtractorId } from "@/lib/dataGrid/dataGridCopyExtractor";
 import { columnNamesForCopy } from "@/lib/dataGrid/dataGridColumnNameCopy";
 import { DATA_GRID_ROW_NUM_WIDTH, useDataGridColumnResize } from "@/composables/useDataGridColumnResize";
@@ -1883,6 +1884,8 @@ const gridStyle = computed(() => ({
   [EDITOR_FONT_FAMILY_CSS_VAR]: settingsStore.editorSettings.fontFamily,
   "--dbx-data-grid-font-family": tableFontFamily.value,
   "--dbx-table-font-size": `${tableFontSize.value}px`,
+  // 2026-07-30 coder(lq): Keep DOM rows and the canvas renderer on one persisted stripe token.
+  "--data-grid-row-muted-bg": dataGridStripeBackground(settingsStore.editorSettings.dataGridStripeStrength),
 }));
 const gridHorizontalScrollLeft = ref(0);
 const gridViewportWidth = ref(0);
@@ -2826,6 +2829,7 @@ const {
   cancelEdit,
   onEditKeydown,
   addRow: addEditorRow,
+  appendPastedRows,
   cloneRow,
   showDeleteRowConfirm,
   requestDeleteRow,
@@ -4452,7 +4456,7 @@ const canvasSurfaceWidth = computed(() => {
   if (vw <= 0) return total;
   return Math.min(vw, total);
 });
-const canvasRenderStyleKey = computed(() => `${settingsStore.editorSettings.theme}:${settingsStore.editorSettings.uiScale}:${canvasBackingPixelRatio.value}:${isDark.value}:${themePalette.value}:${tableFontFamily.value}:${tableFontSize.value}`);
+const canvasRenderStyleKey = computed(() => `${settingsStore.editorSettings.theme}:${settingsStore.editorSettings.uiScale}:${canvasBackingPixelRatio.value}:${isDark.value}:${themePalette.value}:${tableFontFamily.value}:${tableFontSize.value}:${settingsStore.editorSettings.dataGridStripeStrength}`);
 const CANVAS_MOUSE_WHEEL_SCROLL_MULTIPLIER = 1.5;
 const CANVAS_TRACKPAD_DELTA_THRESHOLD = 40;
 let canvasPixelRatioMediaQuery: MediaQueryList | null = null;
@@ -5523,7 +5527,6 @@ async function pasteClipboardIntoSelection() {
 
 function pasteTextIntoSelection(text: string): boolean {
   const rows = parseDataGridClipboard(text);
-  const allowDraftSelectionValue = selectedRangeTargetsOnlyDraftRow();
 
   if (rows.length === 1 && rows[0]?.length === 1 && fillSelectionWithValue(rows[0][0])) {
     toast(t("grid.pasted"));
@@ -5532,14 +5535,42 @@ function pasteTextIntoSelection(text: string): boolean {
 
   const start = pasteStartCell();
   if (!start) return false;
+  const rowsToAppend = dataGridPasteRowsToAppend(rows.length, start.rowIndex, displayRowCount.value, showQuickEntryDraftRow.value);
+  const stableAvailableRows = Math.max(0, rows.length - rowsToAppend);
+  const existingRows = rows.slice(0, stableAvailableRows);
+  const appendedRows = canInsertRows.value ? rows.slice(stableAvailableRows) : [];
+  const availableColumnCount = Math.max(0, visibleColumns.value.length - start.colIndex);
+  const pastedColumnCount = Math.min(
+    rows.reduce((maxColumnCount, row) => Math.max(maxColumnCount, row.length), 0),
+    availableColumnCount,
+  );
+  const pastedColumnIndexes = Array.from({ length: pastedColumnCount }, (_, columnOffset) => actualColumnIndex(start.colIndex + columnOffset));
+  const wasTruncated = rows.some((row) => row.length > availableColumnCount) || (!canInsertRows.value && rowsToAppend > 0) || pastedColumnIndexes.some((columnIndex) => !canEditColumn(columnIndex) || customReadonlyColumns.value.has((props.result.columns[columnIndex] ?? "").toLowerCase()));
   let applied = false;
-  for (const cell of planDataGridPaste(rows, displayRowCount.value - start.rowIndex, visibleColumns.value.length - start.colIndex)) {
-    const item = displayItemAt(start.rowIndex + cell.rowOffset);
-    if (!item) continue;
-    const visibleCol = start.colIndex + cell.columnOffset;
-    applied = applyVisibleSelectedCellValue(item, visibleCol, cell.value, allowDraftSelectionValue) || applied;
+  beginBatch();
+  try {
+    for (const cell of planDataGridPaste(existingRows, existingRows.length, availableColumnCount)) {
+      const item = displayItemAt(start.rowIndex + cell.rowOffset);
+      if (!item) continue;
+      const visibleCol = start.colIndex + cell.columnOffset;
+      applied = applyVisibleSelectedCellValue(item, visibleCol, cell.value, false) || applied;
+    }
+    if (appendedRows.length > 0) {
+      const pastedRows = appendedRows.map((row) =>
+        row
+          .slice(0, availableColumnCount)
+          .map((value, columnOffset) => ({
+            columnIndex: actualColumnIndex(start.colIndex + columnOffset),
+            value,
+          }))
+          .filter((cell) => canEditColumn(cell.columnIndex) && !customReadonlyColumns.value.has((props.result.columns[cell.columnIndex] ?? "").toLowerCase())),
+      );
+      applied = appendPastedRows(pastedRows) > 0 || applied;
+    }
+  } finally {
+    commitBatch();
   }
-  if (applied) toast(t("grid.pasted"));
+  if (applied) toast(t(wasTruncated ? "grid.pastedWithTruncation" : "grid.pasted"));
   return applied;
 }
 

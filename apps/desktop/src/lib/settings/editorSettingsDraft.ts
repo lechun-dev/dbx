@@ -28,6 +28,7 @@ export const EDITOR_SETTINGS_DRAFT_KEYS = [
   "showColumnCommentsInHeader",
   "showColumnTypesInHeader",
   "compactColumnHeaderActions",
+  "dataGridStripeStrength",
   "dataGridQuickEntry",
   "dataGridAutoTransposeSingleRow",
   "tableOpenPageSize",

@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { copyToClipboard } from "@/lib/common/clipboard";
-import { claimDataGridPaste, clearDataGridClipboardCopy, parseDataGridClipboard, planDataGridPaste, rememberDataGridClipboardCopy } from "@/lib/dataGrid/dataGridClipboard";
+import { claimDataGridPaste, clearDataGridClipboardCopy, dataGridPasteRowsToAppend, parseDataGridClipboard, planDataGridPaste, rememberDataGridClipboardCopy } from "@/lib/dataGrid/dataGridClipboard";
 
 afterEach(() => clearDataGridClipboardCopy());
 
@@ -73,6 +73,21 @@ describe("planDataGridPaste", () => {
   it("returns no cells for empty bounds", () => {
     expect(planDataGridPaste([["a"]], 0, 1)).toEqual([]);
     expect(planDataGridPaste([["a"]], 1, 0)).toEqual([]);
+  });
+});
+
+describe("dataGridPasteRowsToAppend", () => {
+  it("appends rows when the clipboard extends past stable display rows", () => {
+    expect(dataGridPasteRowsToAppend(3, 4, 6, false)).toBe(1);
+  });
+
+  it("does not count the transient quick-entry draft as paste capacity", () => {
+    expect(dataGridPasteRowsToAppend(3, 4, 6, true)).toBe(2);
+    expect(dataGridPasteRowsToAppend(2, 5, 6, true)).toBe(2);
+  });
+
+  it("does not append when existing rows can hold the clipboard block", () => {
+    expect(dataGridPasteRowsToAppend(2, 1, 5, false)).toBe(0);
   });
 });
 

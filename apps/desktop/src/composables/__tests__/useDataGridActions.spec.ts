@@ -11,6 +11,7 @@ const mocks = vi.hoisted(() => ({
   getConfig: vi.fn(),
   setExecuting: vi.fn(),
   updateSql: vi.fn(),
+  updateDataSql: vi.fn(),
   getColumns: vi.fn(),
   listIndexes: vi.fn(),
   ensureConnected: vi.fn(),
@@ -46,6 +47,7 @@ vi.mock("@/stores/queryStore", () => ({
     executeTabSql: mocks.executeTabSql,
     setExecuting: mocks.setExecuting,
     updateSql: mocks.updateSql,
+    updateDataSql: mocks.updateDataSql,
     tabs: mocks.tabs,
     setTableMeta: mocks.setTableMeta.mockImplementation((id: string, meta: NonNullable<QueryTab["tableMeta"]>) => {
       const tab = mocks.tabs.find((item) => item.id === id);
@@ -164,6 +166,27 @@ describe("useDataGridActions", () => {
       expect.objectContaining({
         resultBaseSql: "SELECT 1",
         resultSortedSql: undefined,
+        preserveResultDuringExecution: true,
+      }),
+    );
+  });
+
+  it("reruns custom SQL in a data tab without rebuilding the original table query", async () => {
+    const tab = tableDataTab({
+      sql: "SELECT u.id, o.id FROM users u JOIN orders o ON o.user_id = u.id",
+      lastExecutedSql: "SELECT u.id, o.id FROM users u JOIN orders o ON o.user_id = u.id",
+      dataSqlMode: "custom",
+    });
+    const actions = useDataGridActions(computed(() => tab));
+
+    await actions.onReloadData(undefined, "", "", "", undefined, undefined, "refresh");
+
+    expect(mocks.buildTableSelectSql).not.toHaveBeenCalled();
+    expect(mocks.executeTabSql).toHaveBeenCalledWith(
+      "tab-1",
+      "SELECT u.id, o.id FROM users u JOIN orders o ON o.user_id = u.id",
+      expect.objectContaining({
+        resultBaseSql: "SELECT u.id, o.id FROM users u JOIN orders o ON o.user_id = u.id",
         preserveResultDuringExecution: true,
       }),
     );

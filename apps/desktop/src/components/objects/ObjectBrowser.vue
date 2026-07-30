@@ -130,6 +130,8 @@ const props = defineProps<{
   database: string;
   catalog?: string;
   schema?: string;
+  objectType?: "tables";
+  filterRequestId?: number;
   viewport?: ObjectBrowserViewport;
 }>();
 
@@ -155,8 +157,8 @@ const selectedSchema = ref<string | undefined>(props.schema);
 const rows = ref<ObjectBrowserRow[]>([]);
 const rootRef = ref<HTMLElement>();
 const search = ref("");
-const objectFilter = ref<ObjectFilter>("all");
-const userHasSelectedFilter = ref(false);
+const objectFilter = ref<ObjectFilter>(props.objectType ?? "all");
+const userHasSelectedFilter = ref(!!props.objectType);
 const sortKey = ref<ObjectBrowserSortKey>("name");
 const sortDirection = ref<ObjectBrowserSortDirection>("asc");
 const loadingSchemas = ref(false);
@@ -423,6 +425,12 @@ watch(
     void reload();
   },
 );
+
+watch([() => props.objectType, () => props.filterRequestId], ([objectType]) => {
+  if (!objectType) return;
+  userHasSelectedFilter.value = true;
+  objectFilter.value = objectType;
+});
 
 const showCheckboxColumn = computed(() => settingsStore.editorSettings.objectBrowserShowCheckbox || selectedTableCount.value > 0);
 
@@ -2387,8 +2395,8 @@ watch(
   async () => {
     const contextEpoch = objectBrowserRowsLoadGuard.invalidate();
     selectedSchema.value = props.schema;
-    userHasSelectedFilter.value = false;
-    objectFilter.value = "all";
+    userHasSelectedFilter.value = !!props.objectType;
+    objectFilter.value = props.objectType ?? "all";
     clearTableSelection();
     // Close side panel and invalidate any pending source/table-info requests
     // so stale results from the old context don't overwrite new state.

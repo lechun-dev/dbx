@@ -929,6 +929,8 @@ export interface QueryTab {
   explainClientSessionId?: string;
   /** Invalidates tab-scoped completion metadata after session context changes. */
   completionContextVersion?: number;
+  /** 2026-07-30 coder(lq): Keep the original table identity while custom SQL results are shown read-only. */
+  dataSqlMode?: "table" | "custom";
   mode:
     | "data"
     | "query"
@@ -971,6 +973,7 @@ export interface QueryTab {
     catalog?: string;
     schema?: string;
     objectType?: "tables";
+    filterRequestId?: number;
     viewport?: ObjectBrowserViewport;
   };
   objectSource?: {

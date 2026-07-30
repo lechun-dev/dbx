@@ -7,6 +7,7 @@ const mocks = vi.hoisted(() => ({
   closeQuerySession: vi.fn(),
   executeMulti: vi.fn(),
   getConnectionConfig: vi.fn(),
+  prepareQueryPaginationExecutionPlan: vi.fn(),
   saveOpenTabsState: vi.fn(),
 }));
 
@@ -16,6 +17,7 @@ vi.mock("@/lib/backend/api", () => ({
   closeQuerySession: mocks.closeQuerySession,
   executeMulti: mocks.executeMulti,
   saveOpenTabsState: mocks.saveOpenTabsState,
+  prepareQueryPaginationExecutionPlan: mocks.prepareQueryPaginationExecutionPlan,
 }));
 
 vi.mock("@/stores/connectionStore", () => ({
@@ -55,6 +57,14 @@ describe("queryStore table data refresh", () => {
       query_timeout_secs: 30,
     });
     mocks.buildTableSelectSql.mockResolvedValue("SELECT id, status FROM public.users WHERE status = 'ACTIVE' ORDER BY created_at DESC LIMIT 25 OFFSET 50");
+    mocks.prepareQueryPaginationExecutionPlan.mockImplementation(async (options) => ({
+      sqlToExecute: options.sql,
+      pageSql: undefined,
+      pageLimit: undefined,
+      pageOffset: undefined,
+      countSql: undefined,
+      useAgentResultSession: false,
+    }));
     mocks.executeMulti.mockResolvedValue([
       {
         columns: ["id", "status"],
@@ -160,6 +170,27 @@ describe("queryStore table data refresh", () => {
     expect(mocks.executeMulti).toHaveBeenCalledTimes(1);
     expect(store.tabs.find((tab) => tab.id === firstTabId)?.result?.rows).toEqual([]);
     expect(store.tabs.find((tab) => tab.id === secondTabId)?.result).toBeUndefined();
+  });
+
+  it("refreshes custom data SQL from the actual result query instead of the full editor text", async () => {
+    const { useQueryStore } = await import("@/stores/queryStore");
+    const store = useQueryStore();
+    const tabId = store.createTab("pg-1", "app", "users", "data", "public");
+    store.updateDataSql(tabId, "SELECT * FROM users; SELECT * FROM orders", "custom");
+    const tab = store.tabs.find((candidate) => candidate.id === tabId)!;
+    tab.lastExecutedSql = "SELECT * FROM orders";
+    tab.resultBaseSql = "SELECT id FROM orders";
+
+    await expect(store.refreshDataTab(tabId)).resolves.toBe(true);
+
+    expect(mocks.prepareQueryPaginationExecutionPlan).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sql: "SELECT id FROM orders",
+        queryBaseSql: "SELECT id FROM orders",
+      }),
+    );
+    expect(mocks.buildTableSelectSql).not.toHaveBeenCalled();
+    expect(mocks.executeMulti).toHaveBeenCalledTimes(1);
   });
 
   it("uses the table-open default when a refreshed data tab has no saved pagination", async () => {

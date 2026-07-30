@@ -132,6 +132,16 @@ export function useDataGridActions(activeTab: ComputedRef<QueryTab | undefined>)
   async function onReloadData(sql?: string, _searchText?: string, whereInput?: string, orderBy?: string, limit?: number, offset?: number, intent?: DataGridReloadIntent) {
     const tab = activeTab.value;
     if (!tab) return;
+    if (tab.mode === "data" && tab.dataSqlMode === "custom") {
+      const customSql = sql?.trim() || tab.lastExecutedSql?.trim() || tab.sql.trim();
+      if (!customSql) return;
+      await queryStore.executeTabSql(tab.id, customSql, {
+        resultBaseSql: customSql,
+        resultSortedSql: undefined,
+        preserveResultDuringExecution: true,
+      });
+      return;
+    }
     const traceId = uuid().slice(0, 8);
     const startedAt = performance.now();
     const elapsed = () => `${Math.round(performance.now() - startedAt)}ms`;
@@ -181,7 +191,7 @@ export function useDataGridActions(activeTab: ComputedRef<QueryTab | undefined>)
         console.info("[DBX][reloadData:build-sql:start]", { traceId, elapsed: elapsed() });
         const nextSql = await buildTableSql(tab, { whereInput, orderBy, limit: pageLimit, offset: pageOffset });
         console.info("[DBX][reloadData:build-sql:done]", { traceId, elapsed: elapsed() });
-        queryStore.updateSql(tab.id, nextSql);
+        queryStore.updateDataSql(tab.id, nextSql, "table");
         console.info("[DBX][reloadData:execute:start]", { traceId, elapsed: elapsed() });
         await queryStore.executeTabSql(tab.id, nextSql, {
           pagination: { limit: pageLimit, offset: pageOffset },
@@ -249,7 +259,7 @@ export function useDataGridActions(activeTab: ComputedRef<QueryTab | undefined>)
     if (!tab) return;
     const appendResult = settingsStore.editorSettings.infiniteScroll && offset > 0 && offset === tab.result?.rows.length;
     const appendOptions = appendResult ? { appendResult: { maxRows: settingsStore.editorSettings.infiniteScrollMaxRows } } : {};
-    if (tab.mode !== "data") {
+    if (tab.mode !== "data" || tab.dataSqlMode === "custom") {
       const sortColumns = visibleQuerySortColumns(tab.result?.columns ?? [], tab.result?.hidden_column_indexes, tab.resultSortColumnIndex ?? -1);
       const hasDatabaseSort = !!tab.result?.hidden_column_indexes?.length && tab.resultSortMode === "database" && !!tab.resultSortDirection && !!tab.resultSortColumn && !!sortColumns;
       const baseSql = hasDatabaseSort ? queryResultBaseSql(tab) : queryResultExecutionSql(tab);
@@ -283,7 +293,7 @@ export function useDataGridActions(activeTab: ComputedRef<QueryTab | undefined>)
     if (!tableMetaForDataTab(tab)) return;
     tab.whereInput = whereInput ?? "";
     const sql = await buildTableSql(tab, { limit, offset, whereInput, orderBy });
-    queryStore.updateSql(tab.id, sql);
+    queryStore.updateDataSql(tab.id, sql, "table");
     await queryStore.executeTabSql(tab.id, sql, {
       pagination: { offset, limit },
       ...appendOptions,
@@ -301,7 +311,7 @@ export function useDataGridActions(activeTab: ComputedRef<QueryTab | undefined>)
     tab.resultSortMode = direction ? mode : undefined;
 
     if (mode === "local") {
-      if (tab.mode === "data") {
+      if (tab.mode === "data" && tab.dataSqlMode !== "custom") {
         tab.whereInput = whereInput ?? "";
         tab.orderByInput = undefined;
       }
@@ -309,14 +319,14 @@ export function useDataGridActions(activeTab: ComputedRef<QueryTab | undefined>)
       return;
     }
 
-    if (tab.mode === "data") {
+    if (tab.mode === "data" && tab.dataSqlMode !== "custom") {
       if (!tableMetaForDataTab(tab)) return;
       tab.whereInput = whereInput ?? "";
       const config = connectionStore.getConfig(tab.connectionId);
       const quotedColumn = quoteIdent(tab, column);
       const orderBy = direction ? `${config?.db_type === "neo4j" ? `n.${quotedColumn}` : quotedColumn} ${direction.toUpperCase()}` : undefined;
       const sql = await buildTableSql(tab, { orderBy, whereInput });
-      queryStore.updateSql(tab.id, sql);
+      queryStore.updateDataSql(tab.id, sql, "table");
       await queryStore.executeTabSql(tab.id, sql, { preserveResultDuringExecution: true });
       return;
     }
