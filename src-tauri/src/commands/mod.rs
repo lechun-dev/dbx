@@ -9,6 +9,7 @@ pub mod connection;
 mod connection_secrets;
 pub mod csv_export;
 pub mod data_compare;
+pub mod data_dictionary;
 pub mod database_export;
 pub mod deep_link;
 pub mod dialect_cmd;

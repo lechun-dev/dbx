@@ -178,6 +178,7 @@ export interface DesktopSettings {
   plugin_store_dir?: string | null;
   agent_store_dir?: string | null;
   sidebar_table_page_size?: number | null;
+  ai_data_dictionary_refresh_hours: number;
 }
 
 export interface McpGlobalPolicy {
@@ -196,6 +197,18 @@ export interface SavedSqlSyncEntry {
 export interface SavedSqlSyncRequest {
   targetDir: string;
   entries: SavedSqlSyncEntry[];
+}
+
+export interface AiDataDictionaryMarkdownSyncRequest {
+  connectionId: string;
+  database: string;
+  databaseType: string;
+  updatedAt: number;
+  files: Array<{
+    schema?: string;
+    table: string;
+    content: string;
+  }>;
 }
 
 export interface WebDavConfig {
@@ -704,6 +717,7 @@ export interface AiChatMessage {
   role: string;
   content: string;
   mentions?: unknown[];
+  databaseScope?: unknown;
   reasoning?: string;
   kind?: "contextSummary";
 }
@@ -1567,6 +1581,14 @@ export async function backupSqliteDatabase(connectionId: string, destinationPath
 
 export async function syncSavedSqlDirectory(request: SavedSqlSyncRequest): Promise<void> {
   return invoke("sync_saved_sql_directory", { request });
+}
+
+export async function syncAiDataDictionaryMarkdown(request: AiDataDictionaryMarkdownSyncRequest): Promise<void> {
+  return invoke("sync_ai_data_dictionary_markdown", { request });
+}
+
+export async function clearAiDataDictionaryMarkdown(connectionId: string): Promise<void> {
+  return invoke("clear_ai_data_dictionary_markdown", { connectionId });
 }
 
 export async function saveSidebarLayout(layout: import("@/types/database").SidebarLayout): Promise<void> {

@@ -18,6 +18,7 @@ import { DEFAULT_TABLE_COLUMN_TEMPLATE_FIELDS, normalizeTableColumnTemplateField
 import { DEFAULT_DATA_GRID_FONT_FAMILY, DEFAULT_UI_FONT_FAMILY } from "@/lib/app/appFonts";
 import { safeLocalStorageGet, safeLocalStorageRemove } from "@/lib/backend/safeStorage";
 import type { AiProvider, AiApiStyle, AiAuthMethod, AiEffortLevel, AiReasoningLevel, AiConfiguredModel, AiConfig, AiTestConnectionResult, AiConfigItem, AiChatSelectionState, AiEffortSelection, AiModelEffortPreference } from "@/types/ai";
+import { AI_DATA_DICTIONARY_REFRESH_DEFAULT_HOURS, normalizeAiDataDictionaryRefreshHours, type AiDataDictionaryRefreshHours } from "@/lib/ai/dataDictionaryRefreshConfig";
 
 export type { AiProvider, AiApiStyle, AiAuthMethod, AiEffortLevel, AiReasoningLevel, AiConfiguredModel, AiConfig, AiTestConnectionResult, AiConfigItem, AiChatSelectionState, AiEffortSelection };
 
@@ -34,6 +35,7 @@ export interface DesktopSettings {
   plugin_store_dir?: string | null;
   agent_store_dir?: string | null;
   sidebar_table_page_size?: number | null;
+  ai_data_dictionary_refresh_hours: AiDataDictionaryRefreshHours;
 }
 
 export interface McpGlobalPolicy {
@@ -70,6 +72,7 @@ export const DEFAULT_DESKTOP_SETTINGS: DesktopSettings = {
   plugin_store_dir: null,
   agent_store_dir: null,
   sidebar_table_page_size: DEFAULT_SIDEBAR_TABLE_PAGE_SIZE,
+  ai_data_dictionary_refresh_hours: AI_DATA_DICTIONARY_REFRESH_DEFAULT_HOURS,
 };
 
 export const DEFAULT_MCP_GLOBAL_POLICY: McpGlobalPolicy = {
@@ -89,7 +92,11 @@ export function normalizeMcpGlobalPolicy(policy: Partial<McpGlobalPolicy> | null
   };
 }
 
-export function normalizeDesktopSettings(settings: Partial<DesktopSettings> | null | undefined): DesktopSettings {
+type DesktopSettingsInput = Omit<Partial<DesktopSettings>, "ai_data_dictionary_refresh_hours"> & {
+  ai_data_dictionary_refresh_hours?: unknown;
+};
+
+export function normalizeDesktopSettings(settings: DesktopSettingsInput | null | undefined): DesktopSettings {
   const iconTheme = settings?.icon_theme === "black" ? "black" : DEFAULT_DESKTOP_SETTINGS.icon_theme;
   const sidebarTablePageSize = typeof settings?.sidebar_table_page_size === "number" && settings.sidebar_table_page_size > 0 ? settings.sidebar_table_page_size : DEFAULT_DESKTOP_SETTINGS.sidebar_table_page_size;
   return {
@@ -105,6 +112,7 @@ export function normalizeDesktopSettings(settings: Partial<DesktopSettings> | nu
     plugin_store_dir: settings?.plugin_store_dir?.trim() || DEFAULT_DESKTOP_SETTINGS.plugin_store_dir,
     agent_store_dir: settings?.agent_store_dir?.trim() || DEFAULT_DESKTOP_SETTINGS.agent_store_dir,
     sidebar_table_page_size: sidebarTablePageSize,
+    ai_data_dictionary_refresh_hours: normalizeAiDataDictionaryRefreshHours(settings?.ai_data_dictionary_refresh_hours),
   };
 }
 
@@ -1056,7 +1064,7 @@ export const useSettingsStore = defineStore("settings", () => {
     isDesktopSettingsLoaded.value = true;
   }
 
-  async function updateDesktopSettings(partial: Partial<DesktopSettings>) {
+  async function updateDesktopSettings(partial: DesktopSettingsInput) {
     const previous = desktopSettings.value;
     const next = {
       ...desktopSettings.value,

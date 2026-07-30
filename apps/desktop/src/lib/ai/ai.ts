@@ -5,7 +5,21 @@ import type { PromptTemplate } from "@/types/promptTemplate";
 import * as api from "@/lib/backend/api";
 import { currentLocale, type Locale } from "@/i18n";
 import { aiTableMentionKey, type AiTableMention } from "@/lib/ai/aiTableMentions";
+import {
+  AI_DATA_DICTIONARY_MAX_STALE_REFRESH_PER_BUILD,
+  AI_DATA_DICTIONARY_TTL_MS,
+  aiDataDictionaryTableSignature,
+  createAiDataDictionarySnapshot,
+  findAiDataDictionaryTable,
+  loadAiDataDictionary,
+  reconcileAiDataDictionarySchema,
+  saveAiDataDictionary,
+  shouldRefreshAiDataDictionaryTable,
+  upsertAiDataDictionaryTable,
+  type AiDataDictionaryTable,
+} from "@/lib/ai/dataDictionary";
 import { aiSkillForAction } from "@/lib/ai/aiSkills";
+import { aiDatabaseTypeSupportsCrossDatabaseSql, aiScopeDatabases, normalizeAiDatabaseScope, type AiDatabaseScope } from "@/lib/ai/aiDatabaseScope";
 import { isSchemaAware } from "@/lib/database/databaseCapabilities";
 import { effectiveDatabaseTypeForConnection } from "@/lib/database/jdbcDialect";
 
@@ -58,6 +72,7 @@ function isChineseLocale(locale: Locale): boolean {
 }
 
 export interface AiSchemaTable {
+  database?: string;
   schema?: string;
   name: string;
   tableType: string;
@@ -79,12 +94,14 @@ export interface AiContext {
   connectionName: string;
   databaseType: DatabaseType;
   database: string;
+  databases: string[];
+  databaseScope: AiDatabaseScope["mode"];
   currentSql: string;
   lastError?: string;
   lastResultPreview?: string;
   tables: AiSchemaTable[];
   sqlFiles: AiSqlFileContext[];
-  schemaScope?: "focused_table" | "database";
+  schemaScope?: "focused_table" | "database" | "multi_database" | "none";
   truncated: boolean;
 }
 
@@ -105,6 +122,13 @@ export interface AiRequestInput {
 export interface CustomPromptContext {
   globalInstructions?: string;
   activeTemplates?: PromptTemplate[];
+}
+
+function normalizeRequestForDatabaseScope(input: AiRequestInput): AiRequestInput {
+  if (input.context.databaseScope !== "unscoped") return input;
+  // 2026-07-29 coder(lq): Unscoped mode is deliberately ordinary Q&A only.
+  // Enforce this below the UI so stale component state cannot request SQL work.
+  return { ...input, action: "general", mode: "ask", allowWriteSql: false };
 }
 
 function buildCustomInstructionLines(custom: CustomPromptContext | undefined, isZh: boolean): string[] {
@@ -141,7 +165,7 @@ function buildAgentRequest(input: AiRequestInput, history?: api.AiMessage[], cus
 }
 
 export async function runAiAction(input: AiRequestInput, history?: api.AiMessage[], custom?: CustomPromptContext): Promise<string> {
-  const { messages, systemPrompt, taskContract, maxTokens } = buildAgentRequest(input, history, custom);
+  const { messages, systemPrompt, taskContract, maxTokens } = buildAgentRequest(normalizeRequestForDatabaseScope(input), history, custom);
   return api.aiComplete({
     config: input.config,
     systemPrompt,
@@ -152,7 +176,7 @@ export async function runAiAction(input: AiRequestInput, history?: api.AiMessage
 }
 
 export async function runAiStream(input: AiRequestInput, history: api.AiMessage[] | undefined, onDelta: (delta: string) => void, sessionId?: string, onReasoningDelta?: (delta: string) => void, custom?: CustomPromptContext): Promise<void> {
-  const { messages, systemPrompt, taskContract, maxTokens } = buildAgentRequest(input, history, custom);
+  const { messages, systemPrompt, taskContract, maxTokens } = buildAgentRequest(normalizeRequestForDatabaseScope(input), history, custom);
   const sid = sessionId || uuid();
 
   await api.aiStream(
@@ -174,8 +198,36 @@ export async function runAiStream(input: AiRequestInput, history: api.AiMessage[
 }
 
 export async function runAgentStream(input: AiRequestInput, history: api.AiMessage[] | undefined, onEvent: (event: AgentEvent) => void, sessionId?: string, custom?: CustomPromptContext): Promise<string> {
-  const { messages, systemPrompt, taskContract, maxTokens } = buildAgentRequest(input, history, custom);
+  const normalizedInput = normalizeRequestForDatabaseScope(input);
+  const { messages, systemPrompt, taskContract, maxTokens } = buildAgentRequest(normalizedInput, history, custom);
   const sid = sessionId || uuid();
+
+  if (normalizedInput.context.databaseScope === "unscoped") {
+    // 2026-07-29 coder(lq): The agent endpoint always exposes metadata tools,
+    // including in Ask mode. Route unscoped chat through the tool-free stream
+    // endpoint so it cannot inspect tables or columns behind the user's back.
+    let content = "";
+    await api.aiStream(
+      sid,
+      {
+        config: normalizedInput.config,
+        systemPrompt,
+        messages,
+        taskContract,
+        maxTokens,
+      },
+      (chunk) => {
+        if (chunk.done) return;
+        if (chunk.reasoning_delta) onEvent({ type: "reasoning_delta", delta: chunk.reasoning_delta });
+        if (chunk.delta) {
+          content += chunk.delta;
+          onEvent({ type: "text_delta", delta: chunk.delta });
+        }
+      },
+    );
+    onEvent({ type: "agent_end" });
+    return content;
+  }
 
   return api.aiAgentStream(
     sid,
@@ -186,15 +238,15 @@ export async function runAgentStream(input: AiRequestInput, history: api.AiMessa
       taskContract,
       maxTokens,
     },
-    input.context.connectionId,
-    input.context.database,
-    input.context.databaseType,
+    normalizedInput.context.connectionId,
+    normalizedInput.context.database,
+    normalizedInput.context.databaseType,
     onEvent,
-    input.mode || "ask",
-    input.allowWriteSql || false,
-    input.confirmedWriteSql,
-    input.confirmedConnectionId,
-    input.confirmedDatabase,
+    normalizedInput.mode || "ask",
+    normalizedInput.allowWriteSql || false,
+    normalizedInput.confirmedWriteSql,
+    normalizedInput.confirmedConnectionId,
+    normalizedInput.confirmedDatabase,
   );
 }
 
@@ -241,7 +293,29 @@ export function buildSystemPrompt(action: AiAction, context: AiContext, mode: Ai
 
   const isZh = isChineseLocale(currentLocale());
 
-  const lines: string[] = [...buildBasePromptLines(isZh), ...buildModePromptLines(mode, isZh), ...buildActionPromptLines(action, isZh), ...buildCustomInstructionLines(custom, isZh)];
+  const lines: string[] = [...buildBasePromptLines(isZh), ...buildModePromptLines(context, mode, isZh), ...buildActionPromptLines(action, isZh), ...buildCustomInstructionLines(custom, isZh)];
+
+  if (context.databaseScope === "unscoped") {
+    lines.push(
+      isZh
+        ? "当前未限定数据库：可以回答数据库通用问题，但没有加载任何数据库结构。不要声称知道当前实例中的表或字段，也不要调用执行工具；如需生成可执行 SQL，先请用户选择数据库范围。"
+        : "No database scope is selected. You may answer general database questions, but no schema has been loaded. Do not claim to know tables or columns on this instance and do not call execution tools; ask the user to select a database scope before producing executable SQL.",
+    );
+  } else if (context.databaseScope === "selected" && context.databases.length > 1) {
+    if (aiDatabaseTypeSupportsCrossDatabaseSql(context.databaseType)) {
+      lines.push(
+        isZh
+          ? `当前选择了同一连接内的多个数据库（${context.databases.join("、")}）。跨库 SQL 中的每张表都必须使用完整限定名（database.table，存在 schema 时使用 database.schema.table），不能依赖默认数据库。多库结构已加载到下方 Schema，优先直接使用，不要调用仅面向默认单库的元数据工具重复扫描。不同连接或服务器不能直接 JOIN，应建议 ETL、联邦查询或应用层合并。`
+          : `Multiple databases on the same connection are selected (${context.databases.join(", ")}). Every table in cross-database SQL must use a fully qualified name (database.table, or database.schema.table when applicable) and must not rely on a default database. The selected schemas are already loaded below; use them directly instead of calling metadata tools that only target the default database. Databases on different connections or servers cannot be joined directly; suggest ETL, federated queries, or application-layer merging.`,
+      );
+    } else {
+      lines.push(
+        isZh
+          ? `当前选择了多个数据库（${context.databases.join("、")}），但当前数据库方言不支持通过普通完整表名直接跨库 JOIN。只能分别生成只读查询，并建议 ETL、联邦查询或应用层合并；不要调用执行工具假装已完成跨库查询。`
+          : `Multiple databases are selected (${context.databases.join(", ")}), but this dialect cannot directly join them through ordinary fully qualified table names. Generate separate read-only queries and suggest ETL, federated queries, or application-layer merging; do not call execution tools as if a cross-database query had run.`,
+      );
+    }
+  }
 
   if (schemaScope === "focused_table") {
     lines.push(
@@ -262,7 +336,8 @@ export function buildSystemPrompt(action: AiAction, context: AiContext, mode: Ai
     "",
     `Database type: ${context.databaseType}`,
     `Connection: ${context.connectionName}`,
-    `Database: ${context.database}`,
+    `Database scope: ${context.databaseScope}`,
+    `Databases: ${context.databases.length ? context.databases.join(", ") : "(none)"}`,
     schemaCoverageLine(context, isZh),
     "",
     `Current SQL:\n${context.currentSql.trim() || "(empty)"}`,
@@ -315,7 +390,8 @@ function buildVectorSystemPrompt(context: AiContext, mode: AiAssistantMode, cust
     "",
     `Database type: ${context.databaseType}`,
     `Connection: ${context.connectionName}`,
-    `Database: ${context.database}`,
+    `Database scope: ${context.databaseScope}`,
+    `Databases: ${context.databases.length ? context.databases.join(", ") : "(none)"}`,
     schemaCoverageLine(context, isZh),
     "",
     `Current collection:\n${context.currentSql.trim() || "(none)"}`,
@@ -338,6 +414,13 @@ function buildVectorSystemPrompt(context: AiContext, mode: AiAssistantMode, cust
 }
 
 function buildVectorModePromptLines(context: AiContext, mode: AiAssistantMode, isZh: boolean): string[] {
+  if (context.databaseScope === "unscoped") {
+    return [
+      isZh
+        ? "当前未限定数据库，只进行普通问答。不要调用集合工具，不要声称知道当前连接中的集合；需要读取或执行时请用户先选择数据库。"
+        : "No database scope is selected. Answer general questions only; do not call collection tools or claim to know collections on the connection. Ask the user to select a database before reading or executing.",
+    ];
+  }
   if (mode === "agent") {
     return [isZh ? "你处于 Agent 模式。你有以下工具可用：list_collections、browse_collection。" : "You are in Agent mode. You have the following tools available: list_collections, browse_collection."];
   }
@@ -348,8 +431,11 @@ function buildVectorModePromptLines(context: AiContext, mode: AiAssistantMode, i
   ];
 }
 
-function buildModePromptLines(mode: AiAssistantMode, isZh: boolean): string[] {
+function buildModePromptLines(context: AiContext, mode: AiAssistantMode, isZh: boolean): string[] {
   if (mode === "agent") {
+    if (context.databaseScope === "unscoped") {
+      return [isZh ? "未选择数据库范围，Agent 执行工具不可用；只进行普通问答，并提示用户先选择数据库后再执行。" : "No database scope is selected, so Agent execution tools are unavailable. Answer conversationally and ask the user to select a database before execution."];
+    }
     return [
       isZh ? "你处于 Agent 模式。你有以下工具可用：list_tables、get_columns、execute_query、get_sample_data。" : "You are in Agent mode. You have the following tools available: list_tables, get_columns, execute_query, get_sample_data.",
       isZh
@@ -366,6 +452,12 @@ function buildModePromptLines(mode: AiAssistantMode, isZh: boolean): string[] {
 }
 
 function schemaCoverageLine(context: AiContext, isZh: boolean): string {
+  if (context.schemaScope === "none") {
+    return isZh ? "Schema 上下文未加载（未限定数据库）。" : "Schema context is not loaded (no database scope selected).";
+  }
+  if (context.schemaScope === "multi_database") {
+    return context.truncated ? "Schema context is truncated across the selected databases." : "Schema context covers the selected databases.";
+  }
   if (context.schemaScope === "focused_table") {
     if (isVectorDbType(context.databaseType)) {
       return isZh ? "Schema 上下文只覆盖当前打开的集合，不是完整的集合列表。" : "Schema context scope: focused collection only; not a complete collection list.";
@@ -385,7 +477,7 @@ function formatSchema(context: AiContext): string {
 
   return context.tables
     .map((table) => {
-      const name = table.schema ? `${table.schema}.${table.name}` : table.name;
+      const name = [table.database, table.schema, table.name].filter(Boolean).join(".");
       const lines: string[] = [`${name} (${table.tableType})`];
       const tableComment = table.comment?.trim();
       if (tableComment) lines.push(`  Comment: ${tableComment}`);
@@ -428,7 +520,102 @@ function formatReferencedSqlFiles(context: AiContext): string {
   ].join("\n\n");
 }
 
-export async function buildAiContext(tab: QueryTab, connection: ConnectionConfig, options: { maxTables?: number; maxColumnsPerTable?: number; maxIndexesPerTable?: number; maxFksPerTable?: number; mentionedTables?: AiTableMention[]; sqlFiles?: AiSqlFileContext[] } = {}): Promise<AiContext> {
+export interface AiContextBuildOptions {
+  maxTables?: number;
+  maxColumnsPerTable?: number;
+  maxIndexesPerTable?: number;
+  maxFksPerTable?: number;
+  mentionedTables?: AiTableMention[];
+  sqlFiles?: AiSqlFileContext[];
+  databaseScope?: AiDatabaseScope;
+}
+
+export async function buildAiContext(tab: QueryTab, connection: ConnectionConfig, options: AiContextBuildOptions = {}): Promise<AiContext> {
+  const databaseType = aiDatabaseTypeForConnection(connection);
+  const scope = normalizeAiDatabaseScope(options.databaseScope, tab.database);
+  const databases = aiScopeDatabases(scope, tab.database);
+
+  if (!databases.length) {
+    // 2026-07-29 coder(lq): An unscoped chat intentionally avoids all metadata
+    // calls so general questions never trigger a scan of every database.
+    return {
+      connectionId: tab.connectionId,
+      connectionName: connection.name,
+      databaseType,
+      database: "",
+      databases: [],
+      databaseScope: "unscoped",
+      currentSql: tab.sql,
+      lastError: extractLastError(tab.result),
+      lastResultPreview: formatResultPreview(tab.result),
+      tables: [],
+      sqlFiles: options.sqlFiles ?? [],
+      schemaScope: "none",
+      truncated: false,
+    };
+  }
+
+  if (databases.length === 1) {
+    const database = databases[0];
+    const scopedTab: QueryTab = {
+      ...tab,
+      database,
+      tableMeta: database === tab.database ? tab.tableMeta : undefined,
+    };
+    const context = await buildSingleDatabaseAiContext(scopedTab, connection, options);
+    return {
+      ...context,
+      database,
+      databases,
+      databaseScope: scope.mode,
+    };
+  }
+
+  const maxTables = options.maxTables ?? 50;
+  const tables: AiSchemaTable[] = [];
+  let truncated = false;
+
+  // 2026-07-29 coder(lq): Build selected databases sequentially against one
+  // connection and share one table budget, preventing N databases from
+  // multiplying the prompt and metadata load by N.
+  for (const database of databases) {
+    const remaining = Math.max(0, maxTables - tables.length);
+    if (!remaining) {
+      truncated = true;
+      break;
+    }
+    const scopedTab: QueryTab = {
+      ...tab,
+      database,
+      tableMeta: database === tab.database ? tab.tableMeta : undefined,
+    };
+    const context = await buildSingleDatabaseAiContext(scopedTab, connection, {
+      ...options,
+      databaseScope: undefined,
+      maxTables: remaining,
+    });
+    tables.push(...context.tables.map((table) => ({ ...table, database })));
+    truncated ||= context.truncated;
+  }
+
+  return {
+    connectionId: tab.connectionId,
+    connectionName: connection.name,
+    databaseType,
+    database: tab.database || databases[0],
+    databases,
+    databaseScope: "selected",
+    currentSql: tab.sql,
+    lastError: extractLastError(tab.result),
+    lastResultPreview: formatResultPreview(tab.result),
+    tables,
+    sqlFiles: options.sqlFiles ?? [],
+    schemaScope: "multi_database",
+    truncated,
+  };
+}
+
+async function buildSingleDatabaseAiContext(tab: QueryTab, connection: ConnectionConfig, options: AiContextBuildOptions = {}): Promise<AiContext> {
   const maxTables = options.maxTables ?? 50;
   const maxColumnsPerTable = options.maxColumnsPerTable ?? 40;
   const maxIndexesPerTable = options.maxIndexesPerTable ?? 10;
@@ -439,33 +626,71 @@ export async function buildAiContext(tab: QueryTab, connection: ConnectionConfig
   let truncated = false;
   let schemaScope: AiContext["schemaScope"] = "database";
   let currentCollectionName: string | undefined;
+  const supportsDataDictionary = !["redis", "mongodb"].includes(connection.db_type) && !isVectorDbType(databaseType);
+  let dictionary = supportsDataDictionary ? await loadAiDataDictionary(tab.connectionId, tab.database) : undefined;
+  if (dictionary?.databaseType !== databaseType) dictionary = undefined;
+  let dictionaryDirty = false;
+  if (supportsDataDictionary && !dictionary) {
+    dictionary = createAiDataDictionarySnapshot({
+      connectionId: tab.connectionId,
+      connectionName: connection.name,
+      database: tab.database,
+      databaseType,
+    });
+  } else if (dictionary && dictionary.connectionName !== connection.name) {
+    dictionary.connectionName = connection.name;
+    dictionaryDirty = true;
+  }
 
   if (tab.tableMeta) {
     schemaScope = "focused_table";
     const s = tab.tableMeta.schema ?? "";
     const tName = tab.tableMeta.tableName;
-    const [indexes, foreignKeys] = await Promise.all([api.listIndexes(tab.connectionId, tab.database, s, tName).catch(() => [] as IndexInfo[]), api.listForeignKeys(tab.connectionId, tab.database, s, tName).catch(() => [] as ForeignKeyInfo[])]);
-    const tableComment = await loadTableComment(tab.connectionId, tab.database, s, tName).catch(() => undefined);
-    tables.push({
-      schema: tab.tableMeta.schema,
-      name: tName,
-      tableType: "TABLE",
-      comment: tableComment,
-      columns: tab.tableMeta.columns.slice(0, maxColumnsPerTable),
-      indexes: indexes.slice(0, maxIndexesPerTable),
-      foreignKeys: foreignKeys.slice(0, maxFksPerTable),
-    });
+    const cached = findAiDataDictionaryTable(dictionary, tab.tableMeta.schema, tName);
+    let entry: AiDataDictionaryTable;
+    if (cached && Date.now() - cached.scannedAt < AI_DATA_DICTIONARY_TTL_MS) {
+      entry = cached;
+    } else {
+      const [indexes, foreignKeys] = await Promise.all([api.listIndexes(tab.connectionId, tab.database, s, tName).catch(() => [] as IndexInfo[]), api.listForeignKeys(tab.connectionId, tab.database, s, tName).catch(() => [] as ForeignKeyInfo[])]);
+      const tableComment = await loadTableComment(tab.connectionId, tab.database, s, tName).catch(() => undefined);
+      const tableInfo = { name: tName, table_type: cached?.tableType ?? "TABLE", comment: tableComment ?? cached?.comment };
+      entry = {
+        schema: tab.tableMeta.schema,
+        name: tName,
+        tableType: tableInfo.table_type,
+        comment: tableInfo.comment,
+        columns: tab.tableMeta.columns,
+        indexes,
+        foreignKeys,
+        scannedAt: Date.now(),
+        tableSignature: aiDataDictionaryTableSignature(tableInfo),
+      };
+      if (dictionary) {
+        upsertAiDataDictionaryTable(dictionary, entry);
+        dictionaryDirty = true;
+      }
+    }
+    tables.push(trimAiDataDictionaryTable(entry, maxColumnsPerTable, maxIndexesPerTable, maxFksPerTable));
     tableKeys.add(aiTableMentionKey(tab.tableMeta.schema, tName));
-    truncated = tab.tableMeta.columns.length > maxColumnsPerTable;
+    truncated = entry.columns.length > maxColumnsPerTable;
   }
 
   for (const mention of options.mentionedTables ?? []) {
     const key = aiTableMentionKey(mention.schema, mention.table);
     if (tableKeys.has(key)) continue;
-    const entry = await loadMentionedTableContext(tab, connection, mention, maxColumnsPerTable, maxIndexesPerTable, maxFksPerTable).catch(() => undefined);
+    let dictionaryEntry = findAiDataDictionaryTable(dictionary, mention.schema, mention.table);
+    if (!dictionaryEntry || Date.now() - dictionaryEntry.scannedAt >= AI_DATA_DICTIONARY_TTL_MS) {
+      dictionaryEntry = await loadMentionedTableDictionaryEntry(tab, connection, mention).catch(() => undefined);
+      if (dictionary && dictionaryEntry) {
+        upsertAiDataDictionaryTable(dictionary, dictionaryEntry);
+        dictionaryDirty = true;
+      }
+    }
+    const entry = dictionaryEntry ? trimAiDataDictionaryTable(dictionaryEntry, maxColumnsPerTable, maxIndexesPerTable, maxFksPerTable) : undefined;
     if (!entry) continue;
     tableKeys.add(aiTableMentionKey(entry.schema, entry.name));
     tables.push(entry);
+    if (dictionaryEntry && dictionaryEntry.columns.length > maxColumnsPerTable) truncated = true;
   }
 
   // Vector databases: load collections instead of SQL tables
@@ -504,46 +729,55 @@ export async function buildAiContext(tab: QueryTab, connection: ConnectionConfig
     }
   }
 
-  if (!tab.tableMeta && !["redis", "mongodb"].includes(connection.db_type) && !isVectorDbType(databaseType)) {
+  if (!tab.tableMeta && supportsDataDictionary && dictionary) {
     try {
       const schemas = await loadCandidateSchemas(tab, connection);
+      let staleRefreshes = 0;
       for (const schema of schemas) {
+        if (tables.length >= maxTables) break;
         const tableList = await api.listTables(tab.connectionId, tab.database, schema);
-        const candidates = tableList.slice(0, maxTables - tables.length);
+        const candidates = tableList.slice(0, Math.max(0, maxTables - tables.length));
         if (candidates.length < tableList.length) truncated = true;
+        const dictionarySchema = schema === tab.database && !isSchemaAware(databaseType) ? undefined : schema;
+        if (reconcileAiDataDictionarySchema(dictionary, dictionarySchema, tableList)) dictionaryDirty = true;
 
         const metaResults = await Promise.all(
-          candidates.map((table) =>
-            Promise.all([
-              api.getColumns(tab.connectionId, tab.database, schema, table.name),
-              api.listIndexes(tab.connectionId, tab.database, schema, table.name).catch(() => [] as IndexInfo[]),
-              api.listForeignKeys(tab.connectionId, tab.database, schema, table.name).catch(() => [] as ForeignKeyInfo[]),
-            ]).then(([columns, indexes, foreignKeys]) => ({
-              schema: schema === tab.database && !isSchemaAware(databaseType) ? undefined : schema,
-              name: table.name,
-              tableType: table.table_type,
-              comment: table.comment,
-              columns: columns.slice(0, maxColumnsPerTable),
-              indexes: indexes.slice(0, maxIndexesPerTable),
-              foreignKeys: foreignKeys.slice(0, maxFksPerTable),
-              _truncatedCols: columns.length > maxColumnsPerTable,
-            })),
-          ),
+          candidates.map(async (table): Promise<AiDataDictionaryTable | undefined> => {
+            const cached = findAiDataDictionaryTable(dictionary, dictionarySchema, table.name);
+            const refreshReason = shouldRefreshAiDataDictionaryTable(cached, table);
+            const refresh = refreshReason === "missing" || refreshReason === "signature" || (refreshReason === "stale" && staleRefreshes++ < AI_DATA_DICTIONARY_MAX_STALE_REFRESH_PER_BUILD);
+            if (!refresh) return cached;
+            try {
+              const scanned = await loadAiDataDictionaryTable(tab, schema, dictionarySchema, table);
+              upsertAiDataDictionaryTable(dictionary, scanned);
+              dictionaryDirty = true;
+              return scanned;
+            } catch {
+              truncated = true;
+              return cached;
+            }
+          }),
         );
 
         for (const meta of metaResults) {
-          if (meta._truncatedCols) truncated = true;
-          const { _truncatedCols, ...entry } = meta;
+          if (!meta) continue;
+          if (meta.columns.length > maxColumnsPerTable) truncated = true;
+          const entry = trimAiDataDictionaryTable(meta, maxColumnsPerTable, maxIndexesPerTable, maxFksPerTable);
           const key = aiTableMentionKey(entry.schema, entry.name);
           if (tableKeys.has(key)) continue;
           tableKeys.add(key);
           tables.push(entry);
         }
-        if (tables.length >= maxTables) break;
       }
     } catch {
       truncated = true;
     }
+  }
+
+  if (dictionary && dictionaryDirty) {
+    await saveAiDataDictionary(dictionary).catch(() => {
+      truncated = true;
+    });
   }
 
   return {
@@ -551,6 +785,8 @@ export async function buildAiContext(tab: QueryTab, connection: ConnectionConfig
     connectionName: connection.name,
     databaseType,
     database: tab.database,
+    databases: tab.database ? [tab.database] : [],
+    databaseScope: "current",
     currentSql: currentCollectionName ?? tab.sql,
     lastError: extractLastError(tab.result),
     lastResultPreview: formatResultPreview(tab.result),
@@ -561,8 +797,7 @@ export async function buildAiContext(tab: QueryTab, connection: ConnectionConfig
   };
 }
 
-async function loadMentionedTableContext(tab: QueryTab, connection: ConnectionConfig, mention: AiTableMention, maxColumnsPerTable: number, maxIndexesPerTable: number, maxFksPerTable: number): Promise<AiSchemaTable | undefined> {
-  const databaseType = aiDatabaseTypeForConnection(connection);
+async function loadMentionedTableDictionaryEntry(tab: QueryTab, connection: ConnectionConfig, mention: AiTableMention): Promise<AiDataDictionaryTable | undefined> {
   const schema = await resolveMentionedTableSchema(tab, connection, mention);
   const [columns, indexes, foreignKeys, tableComment] = await Promise.all([
     api.getColumns(tab.connectionId, tab.database, schema, mention.table),
@@ -570,14 +805,49 @@ async function loadMentionedTableContext(tab: QueryTab, connection: ConnectionCo
     api.listForeignKeys(tab.connectionId, tab.database, schema, mention.table).catch(() => [] as ForeignKeyInfo[]),
     loadTableComment(tab.connectionId, tab.database, schema, mention.table).catch(() => undefined),
   ]);
+  const dictionarySchema = schema === tab.database && !isSchemaAware(aiDatabaseTypeForConnection(connection)) ? undefined : schema;
+  const tableInfo = { name: mention.table, table_type: "TABLE", comment: tableComment };
   return {
-    schema: schema === tab.database && !isSchemaAware(databaseType) ? undefined : schema,
+    schema: dictionarySchema,
     name: mention.table,
     tableType: "TABLE",
     comment: tableComment,
-    columns: columns.slice(0, maxColumnsPerTable),
-    indexes: indexes.slice(0, maxIndexesPerTable),
-    foreignKeys: foreignKeys.slice(0, maxFksPerTable),
+    columns,
+    indexes,
+    foreignKeys,
+    scannedAt: Date.now(),
+    tableSignature: aiDataDictionaryTableSignature(tableInfo),
+  };
+}
+
+async function loadAiDataDictionaryTable(tab: QueryTab, querySchema: string, dictionarySchema: string | undefined, table: { name: string; table_type: string; comment?: string | null }): Promise<AiDataDictionaryTable> {
+  const [columns, indexes, foreignKeys] = await Promise.all([
+    api.getColumns(tab.connectionId, tab.database, querySchema, table.name),
+    api.listIndexes(tab.connectionId, tab.database, querySchema, table.name).catch(() => [] as IndexInfo[]),
+    api.listForeignKeys(tab.connectionId, tab.database, querySchema, table.name).catch(() => [] as ForeignKeyInfo[]),
+  ]);
+  return {
+    schema: dictionarySchema,
+    name: table.name,
+    tableType: table.table_type,
+    comment: table.comment,
+    columns,
+    indexes,
+    foreignKeys,
+    scannedAt: Date.now(),
+    tableSignature: aiDataDictionaryTableSignature(table),
+  };
+}
+
+function trimAiDataDictionaryTable(table: AiDataDictionaryTable, maxColumns: number, maxIndexes: number, maxForeignKeys: number): AiSchemaTable {
+  return {
+    schema: table.schema,
+    name: table.name,
+    tableType: table.tableType,
+    comment: table.comment,
+    columns: table.columns.slice(0, maxColumns),
+    indexes: table.indexes?.slice(0, maxIndexes),
+    foreignKeys: table.foreignKeys?.slice(0, maxForeignKeys),
   };
 }
 

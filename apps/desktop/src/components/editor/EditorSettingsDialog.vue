@@ -114,6 +114,7 @@ import { useConnectionStore } from "@/stores/connectionStore";
 import { useSavedSqlStore } from "@/stores/savedSqlStore";
 import { usePromptTemplateStore } from "@/stores/promptTemplateStore";
 import { useTunnelProfileStore } from "@/stores/tunnelProfileStore";
+import { useAiDataDictionaryRefresh } from "@/composables/useAiDataDictionaryRefresh";
 import { currentLocale, setLocale, type Locale } from "@/i18n";
 import { LOCALE_OPTIONS } from "@/lib/app/localeOptions";
 import { DEFAULT_WEB_DAV_AUTO_UPLOAD_INTERVAL_MINUTES, DEFAULT_WEB_DAV_REMOTE_PATH, normalizedWebDavAutoUploadInterval, writeWebDavAutoUploadFields } from "@/lib/webdav/webdavAutoUploadConfig";
@@ -130,6 +131,7 @@ const { t } = useI18n();
 const { toast } = useToast();
 const settingsStore = useSettingsStore();
 const connectionStore = useConnectionStore();
+const { refreshNow: refreshAiDataDictionariesNow } = useAiDataDictionaryRefresh();
 const savedSqlStore = useSavedSqlStore();
 const promptTemplateStore = usePromptTemplateStore();
 const tunnelProfileStore = useTunnelProfileStore();
@@ -302,6 +304,7 @@ const startupDuckDbWorkerMaxProcesses = ref(settingsStore.desktopSettings.duckdb
 const duckDbWorkerStartupCaptured = ref(false);
 const duckDbRestarting = ref(false);
 const editSidebarTablePageSize = ref(settingsStore.desktopSettings.sidebar_table_page_size ?? DEFAULT_SIDEBAR_TABLE_PAGE_SIZE);
+const editAiDataDictionaryRefreshHours = ref(String(DEFAULT_DESKTOP_SETTINGS.ai_data_dictionary_refresh_hours));
 const debugLogCopied = ref(false);
 const debugLogDownloaded = ref(false);
 const editShowColumnCommentsInHeader = ref(settingsStore.editorSettings.showColumnCommentsInHeader);
@@ -749,6 +752,7 @@ watch(
       editDebugLoggingEnabled.value = settingsStore.desktopSettings.debug_logging_enabled;
       editDuckDbWorkerProcessIsolation.value = settingsStore.desktopSettings.duckdb_worker_process_isolation;
       editSidebarTablePageSize.value = settingsStore.desktopSettings.sidebar_table_page_size ?? DEFAULT_SIDEBAR_TABLE_PAGE_SIZE;
+      editAiDataDictionaryRefreshHours.value = String(settingsStore.desktopSettings.ai_data_dictionary_refresh_hours);
     }
   },
   { immediate: true },
@@ -1914,6 +1918,7 @@ watch(
         duckDbWorkerStartupCaptured.value = true;
       }
       editSidebarTablePageSize.value = settingsStore.desktopSettings.sidebar_table_page_size ?? DEFAULT_SIDEBAR_TABLE_PAGE_SIZE;
+      editAiDataDictionaryRefreshHours.value = String(settingsStore.desktopSettings.ai_data_dictionary_refresh_hours);
       webdavPassword.value = "";
       snippetToken.value = "";
       webdavSecretsPassphrase.value = "";
@@ -2045,6 +2050,49 @@ async function changePassword() {
 // Global Custom Instructions
 const editGlobalInstructions = ref("");
 const globalInstructionsSaving = ref(false);
+const aiDataDictionaryRefreshSaving = ref(false);
+const aiDataDictionaryRefreshing = ref(false);
+const aiDataDictionaryRefreshStatus = ref("");
+const aiDataDictionaryRefreshHourOptions = [0, 2, 6, 12, 24] as const;
+
+async function saveAiDataDictionaryRefreshHours(value: unknown) {
+  const hours = Number(value);
+  if (![0, 2, 6, 12, 24].includes(hours)) return;
+  aiDataDictionaryRefreshSaving.value = true;
+  try {
+    await settingsStore.updateDesktopSettings({ ai_data_dictionary_refresh_hours: hours as 0 | 2 | 6 | 12 | 24 });
+    editAiDataDictionaryRefreshHours.value = String(settingsStore.desktopSettings.ai_data_dictionary_refresh_hours);
+    toast(t("ai.dataDictionaryRefreshSaved"));
+  } catch (error: any) {
+    toast(error?.message || String(error), 5000);
+  } finally {
+    aiDataDictionaryRefreshSaving.value = false;
+  }
+}
+
+async function runAiDataDictionaryRefreshNow() {
+  if (aiDataDictionaryRefreshing.value) return;
+  aiDataDictionaryRefreshing.value = true;
+  aiDataDictionaryRefreshStatus.value = "";
+  try {
+    const result = await refreshAiDataDictionariesNow();
+    aiDataDictionaryRefreshStatus.value =
+      result.dictionaries > 0
+        ? t("ai.dataDictionaryRefreshComplete", {
+            dictionaries: result.dictionaries,
+            changed: result.changedTables + result.newTables,
+            deleted: result.deletedTables,
+            failed: result.failedTables,
+          })
+        : t("ai.dataDictionaryRefreshNone");
+    toast(aiDataDictionaryRefreshStatus.value, 5000);
+  } catch (error: any) {
+    aiDataDictionaryRefreshStatus.value = t("ai.dataDictionaryRefreshFailed", { error: error?.message || String(error) });
+    toast(aiDataDictionaryRefreshStatus.value, 5000);
+  } finally {
+    aiDataDictionaryRefreshing.value = false;
+  }
+}
 
 // Prompt Templates Management
 const templateEditing = ref<PromptTemplate | null>(null);
@@ -4696,6 +4744,34 @@ onUnmounted(cleanupPreviewEditor);
                     {{ maxAgentTurnsSaving ? t("common.processing") : t("common.save") }}
                   </Button>
                 </div>
+              </div>
+
+              <!-- 2026-07-29 coder(lq): Global AI data dictionary refresh controls. -->
+              <div v-if="aiConfigListMode === 'list'" class="space-y-3">
+                <Separator />
+                <div>
+                  <h3 class="text-sm font-medium">{{ t("ai.dataDictionaryRefresh") }}</h3>
+                  <p class="text-xs text-muted-foreground">{{ t("ai.dataDictionaryRefreshDescription") }}</p>
+                </div>
+                <div class="flex items-center gap-2">
+                  <Select :model-value="editAiDataDictionaryRefreshHours" :disabled="aiDataDictionaryRefreshSaving" @update:model-value="saveAiDataDictionaryRefreshHours">
+                    <SelectTrigger class="h-8 w-40 text-xs">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem v-for="hours in aiDataDictionaryRefreshHourOptions" :key="hours" :value="String(hours)">
+                        {{ hours === 0 ? t("ai.dataDictionaryRefreshOff") : t("ai.dataDictionaryRefreshHours", { hours }) }}
+                      </SelectItem>
+                    </SelectContent>
+                  </Select>
+                  <Button type="button" size="sm" variant="outline" :disabled="aiDataDictionaryRefreshing" @click="runAiDataDictionaryRefreshNow">
+                    <Loader2 v-if="aiDataDictionaryRefreshing" class="mr-1 h-3.5 w-3.5 animate-spin" />
+                    <RefreshCw v-else class="mr-1 h-3.5 w-3.5" />
+                    {{ aiDataDictionaryRefreshing ? t("common.processing") : t("ai.dataDictionaryRefreshNow") }}
+                  </Button>
+                </div>
+                <p class="text-xs text-muted-foreground">{{ t("ai.dataDictionaryRefreshThrottleHint") }}</p>
+                <p v-if="aiDataDictionaryRefreshStatus" class="text-xs text-muted-foreground">{{ aiDataDictionaryRefreshStatus }}</p>
               </div>
 
               <!-- Prompt Templates Management (list mode) -->

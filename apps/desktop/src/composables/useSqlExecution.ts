@@ -9,6 +9,7 @@ import { isSingleDatabase, usesTreeSchemaMode } from "@/lib/database/databaseCap
 import { supportsConnectionLevelSqlExecution } from "@/lib/connection/connectionLevelDatabaseBootstrap";
 import { classifySqlActivityKind } from "@/lib/history/historyActivityKind";
 import { sqlMetadataRefreshTarget } from "@/lib/sql/sqlMetadataRefresh";
+import { invalidateAiDataDictionary } from "@/lib/ai/dataDictionary";
 import { isQueryExecutionErrorResult, usesMysqlProtocolDatabaseType } from "@/lib/query/queryResultError";
 import { classifyRedisCommandSafety } from "@/lib/redis/redisCommandSafety";
 import { isSqlExecutionSnapshot, resolveExecutableSql, type SqlExecutionOverride, type SqlExecutionSnapshot } from "@/lib/sql/sqlExecutionTarget";
@@ -250,8 +251,15 @@ export function useSqlExecution(deps: {
       const refreshTarget = sqlMetadataRefreshTarget(sql, tab.schema);
       if (refreshTarget.scope === "connection") {
         await connectionStore.loadDatabases(tab.connectionId, { force: true });
+        await invalidateAiDataDictionary({ connectionId: tab.connectionId }).catch(() => undefined);
       } else if (refreshTarget.scope === "database") {
         await connectionStore.refreshObjectListTreeNode(tab.connectionId, tab.database, refreshTarget.schema);
+        await invalidateAiDataDictionary({
+          connectionId: tab.connectionId,
+          database: tab.database,
+          schema: refreshTarget.schema,
+          table: refreshTarget.table,
+        }).catch(() => undefined);
       }
     }
   }

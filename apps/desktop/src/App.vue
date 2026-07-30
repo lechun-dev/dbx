@@ -33,6 +33,7 @@ import { useCloseActionPrompt, type AppCloseAction, type AppCloseRequestOptions 
 import { useVisibilityChange } from "@/composables/useVisibilityChange";
 import { useWebDavAutoUpload } from "@/composables/useWebDavAutoUpload";
 import { useScheduledDatabaseBackups } from "@/composables/useScheduledDatabaseBackups";
+import { useAiDataDictionaryRefresh } from "@/composables/useAiDataDictionaryRefresh";
 import { shouldDrawDesktopWindowFrame } from "@/composables/useWindowControls";
 import { useSaveSqlFolderSelection } from "@/composables/useSaveSqlFolderSelection";
 import "@/i18n";
@@ -347,6 +348,7 @@ const { showCloseActionPrompt, chooseQuit, chooseMinimize, cancelCloseActionProm
 useVisibilityChange();
 useWebDavAutoUpload();
 useScheduledDatabaseBackups({ scheduler: true });
+useAiDataDictionaryRefresh({ scheduler: true });
 
 const appVersion = ref("");
 const isClassicLayout = computed(() => settingsStore.editorSettings.appLayout === "classic");
@@ -1573,9 +1575,17 @@ function routeAiRedisCommand(command: string, execute: boolean): boolean {
   return true;
 }
 
-function onAiReplaceSql(sql: string) {
+function applyAiTargetDatabase(tabId: string, database?: string) {
+  if (!database) return;
+  // 2026-07-29 coder(lq): A single AI-selected database is the execution
+  // target even when the editor was previously showing another database.
+  queryStore.updateDatabase(tabId, database);
+}
+
+function onAiReplaceSql(sql: string, database?: string) {
   if (routeAiRedisCommand(sql, false)) return;
   const tabId = ensureQueryTab();
+  applyAiTargetDatabase(tabId, database);
   queryStore.updateSql(tabId, sql);
 }
 
@@ -1584,26 +1594,29 @@ function runAiGeneratedSql(sql: string) {
   nextTick(() => tryExecute(sql));
 }
 
-function onAiExecuteSql(sql: string) {
+function onAiExecuteSql(sql: string, database?: string) {
   if (routeAiRedisCommand(sql, true)) return;
   const tabId = ensureQueryTab();
+  applyAiTargetDatabase(tabId, database);
   queryStore.updateSql(tabId, buildAppendedEditorSql(activeTab.value?.sql || "", sql));
   runAiGeneratedSql(sql);
 }
 
-function onAiTempRunSql(sql: string) {
+function onAiTempRunSql(sql: string, database?: string) {
   if (routeAiRedisCommand(sql, true)) return;
-  ensureQueryTab();
+  const tabId = ensureQueryTab();
+  applyAiTargetDatabase(tabId, database);
   runAiGeneratedSql(sql);
 }
 
-function onAiRequestAutoExecuteSql(sql: string) {
+function onAiRequestAutoExecuteSql(sql: string, database?: string) {
   if (routeAiRedisCommand(sql, true)) return;
   const tabId = ensureQueryTab();
+  applyAiTargetDatabase(tabId, database);
   queryStore.updateSql(tabId, buildAppendedEditorSql(activeTab.value?.sql || "", sql));
   selectedSql.value = "";
 
-  const productionAssessment = assessProductionSql(sql, activeConnection.value, activeTab.value?.database);
+  const productionAssessment = assessProductionSql(sql, activeConnection.value, database || activeTab.value?.database);
   if (productionAssessment.active && productionAssessment.isMutation) {
     toast(t("production.aiReviewRequired"), 5000);
     return;

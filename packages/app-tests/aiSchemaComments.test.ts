@@ -8,6 +8,8 @@ const BASE_CONTEXT: AiContext = {
   connectionName: "local",
   databaseType: "mysql",
   database: "app",
+  databases: ["app"],
+  databaseScope: "current",
   currentSql: "",
   tables: [
     {
@@ -47,4 +49,37 @@ test("AI schema context includes table and column comments", () => {
   assert.match(prompt, /Comment: 用户表/);
   assert.match(prompt, /- id: bigint \(PK, NOT NULL\) -- 用户ID/);
   assert.match(prompt, /- nickname: varchar\(64\) \(nullable\) -- 用户昵称/);
+});
+
+test("multi-database schema uses fully qualified table names", () => {
+  const prompt = buildSystemPrompt("generate", {
+    ...BASE_CONTEXT,
+    databaseScope: "selected",
+    databases: ["lechun_balance", "lechun_user"],
+    schemaScope: "multi_database",
+    tables: [
+      { ...BASE_CONTEXT.tables[0], database: "lechun_balance", name: "orders" },
+      { ...BASE_CONTEXT.tables[0], database: "lechun_user", name: "users" },
+    ],
+  });
+
+  assert.match(prompt, /Databases: lechun_balance, lechun_user/);
+  assert.match(prompt, /lechun_balance\.orders \(BASE TABLE\)/);
+  assert.match(prompt, /lechun_user\.users \(BASE TABLE\)/);
+  assert.match(prompt, /fully qualified name/);
+  assert.match(prompt, /instead of calling metadata tools that only target the default database/);
+});
+
+test("unscoped AI context contains no database schema", () => {
+  const prompt = buildSystemPrompt("general", {
+    ...BASE_CONTEXT,
+    database: "",
+    databases: [],
+    databaseScope: "unscoped",
+    schemaScope: "none",
+    tables: [],
+  });
+
+  assert.match(prompt, /Databases: \(none\)/);
+  assert.match(prompt, /No table schema loaded/);
 });

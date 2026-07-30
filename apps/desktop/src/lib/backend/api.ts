@@ -134,6 +134,8 @@ export const deleteDatabaseBackupFiles = forward("deleteDatabaseBackupFiles");
 export const isSqliteDatabaseFile = forward("isSqliteDatabaseFile");
 export const backupSqliteDatabase = forward("backupSqliteDatabase");
 export const syncSavedSqlDirectory = forward("syncSavedSqlDirectory");
+export const syncAiDataDictionaryMarkdown = forward("syncAiDataDictionaryMarkdown");
+export const clearAiDataDictionaryMarkdown = forward("clearAiDataDictionaryMarkdown");
 
 // Schema
 export const listDatabases = forward("listDatabases");

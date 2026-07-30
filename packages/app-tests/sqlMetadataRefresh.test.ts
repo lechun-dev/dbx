@@ -25,18 +25,22 @@ test("qualified object DDL refreshes the matching schema node", () => {
   assert.deepEqual(sqlMetadataRefreshTarget("CREATE TABLE public.users (id int);"), {
     scope: "database",
     schema: "public",
+    table: "users",
   });
   assert.deepEqual(sqlMetadataRefreshTarget('ALTER TABLE "Sales".orders ADD COLUMN name text;'), {
     scope: "database",
     schema: "Sales",
+    table: "orders",
   });
   assert.deepEqual(sqlMetadataRefreshTarget("DROP VIEW `reporting`.active_users;"), {
     scope: "database",
     schema: "reporting",
+    table: "active_users",
   });
   assert.deepEqual(sqlMetadataRefreshTarget("CREATE INDEX idx_users_email ON public.users (email);"), {
     scope: "database",
     schema: "public",
+    table: "users",
   });
 });
 
@@ -44,8 +48,22 @@ test("unqualified object DDL can use the active schema as the refresh target", (
   assert.deepEqual(sqlMetadataRefreshTarget("ALTER TABLE users ADD COLUMN name text;", "public"), {
     scope: "database",
     schema: "public",
+    table: "users",
   });
   assert.deepEqual(sqlMetadataRefreshTarget("CREATE SCHEMA analytics;", "public"), { scope: "database" });
+});
+
+test("table and column comments refresh the affected table dictionary", () => {
+  assert.deepEqual(sqlMetadataRefreshTarget("COMMENT ON TABLE public.users IS 'Customers';"), {
+    scope: "database",
+    schema: "public",
+    table: "users",
+  });
+  assert.deepEqual(sqlMetadataRefreshTarget('COMMENT ON COLUMN "Sales".orders.note IS \'Label\';'), {
+    scope: "database",
+    schema: "Sales",
+    table: "orders",
+  });
 });
 
 test("multiple object DDL schemas fall back to refreshing the database tree", () => {

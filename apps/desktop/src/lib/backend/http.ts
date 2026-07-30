@@ -62,6 +62,7 @@ import type {
   DesktopSettings,
   McpGlobalPolicy,
   SavedSqlSyncRequest,
+  AiDataDictionaryMarkdownSyncRequest,
   DriverInstallProgress,
   JavaRuntimeConfig,
   UpdateInfo,
@@ -208,6 +209,7 @@ const DEFAULT_DESKTOP_SETTINGS: DesktopSettings = {
   plugin_store_dir: null,
   agent_store_dir: null,
   sidebar_table_page_size: 1000,
+  ai_data_dictionary_refresh_hours: 6,
 };
 
 async function post<T>(url: string, body: unknown): Promise<T> {
@@ -593,6 +595,14 @@ export async function backupSqliteDatabase(_connectionId: string, _destinationPa
 
 export async function syncSavedSqlDirectory(_request: SavedSqlSyncRequest): Promise<void> {
   throw new Error("SQL directory sync is only available in the desktop app.");
+}
+
+export async function syncAiDataDictionaryMarkdown(_request: AiDataDictionaryMarkdownSyncRequest): Promise<void> {
+  // 2026-07-29 coder(lq): The structured dictionary cache remains available through the web backend.
+}
+
+export async function clearAiDataDictionaryMarkdown(_connectionId: string): Promise<void> {
+  // 2026-07-29 coder(lq): Markdown mirrors are desktop-only.
 }
 
 // ---------------------------------------------------------------------------

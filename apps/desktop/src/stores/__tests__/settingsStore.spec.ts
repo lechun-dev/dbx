@@ -234,6 +234,14 @@ describe("normalizeDesktopSettings", () => {
     expect(normalizeDesktopSettings({ duckdb_worker_max_processes: 32 }).duckdb_worker_max_processes).toBe(16);
     expect(normalizeDesktopSettings({ duckdb_worker_max_processes: 3.6 }).duckdb_worker_max_processes).toBe(4);
   });
+
+  it("defaults the data dictionary refresh to six hours and preserves supported intervals", () => {
+    expect(normalizeDesktopSettings({}).ai_data_dictionary_refresh_hours).toBe(6);
+    for (const value of [0, 2, 6, 12, 24] as const) {
+      expect(normalizeDesktopSettings({ ai_data_dictionary_refresh_hours: value }).ai_data_dictionary_refresh_hours).toBe(value);
+    }
+    expect(normalizeDesktopSettings({ ai_data_dictionary_refresh_hours: 3 }).ai_data_dictionary_refresh_hours).toBe(6);
+  });
 });
 
 describe("normalizeMcpGlobalPolicy", () => {

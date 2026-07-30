@@ -174,6 +174,8 @@ pub struct DesktopSettings {
     pub agent_store_dir: Option<String>,
     #[serde(default = "default_sidebar_table_page_size")]
     pub sidebar_table_page_size: usize,
+    #[serde(default = "default_ai_data_dictionary_refresh_hours")]
+    pub ai_data_dictionary_refresh_hours: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -208,6 +210,17 @@ fn default_sidebar_table_page_size() -> usize {
     1000
 }
 
+fn default_ai_data_dictionary_refresh_hours() -> usize {
+    6
+}
+
+fn normalize_ai_data_dictionary_refresh_hours(value: usize) -> usize {
+    match value {
+        0 | 2 | 6 | 12 | 24 => value,
+        _ => default_ai_data_dictionary_refresh_hours(),
+    }
+}
+
 pub const DUCKDB_WORKER_MAX_PROCESSES_MIN: usize = 1;
 pub const DUCKDB_WORKER_MAX_PROCESSES_MAX: usize = 16;
 pub const DUCKDB_WORKER_MAX_PROCESSES_DEFAULT: usize = 4;
@@ -235,6 +248,7 @@ impl Default for DesktopSettings {
             plugin_store_dir: None,
             agent_store_dir: None,
             sidebar_table_page_size: default_sidebar_table_page_size(),
+            ai_data_dictionary_refresh_hours: default_ai_data_dictionary_refresh_hours(),
         }
     }
 }
@@ -1545,6 +1559,12 @@ impl Storage {
             "sidebar_table_page_size".to_string(),
             serde_json::Value::Number(serde_json::Number::from(desktop_settings.sidebar_table_page_size)),
         );
+        settings.insert(
+            "ai_data_dictionary_refresh_hours".to_string(),
+            serde_json::Value::Number(serde_json::Number::from(normalize_ai_data_dictionary_refresh_hours(
+                desktop_settings.ai_data_dictionary_refresh_hours,
+            ))),
+        );
         self.save_app_settings_json(&settings).await
     }
 
@@ -1608,6 +1628,12 @@ impl Storage {
                 .and_then(|value| value.as_u64())
                 .map(|value| value as usize)
                 .unwrap_or_else(|| DesktopSettings::default().sidebar_table_page_size),
+            ai_data_dictionary_refresh_hours: settings
+                .get("ai_data_dictionary_refresh_hours")
+                .and_then(|value| value.as_u64())
+                .and_then(|value| usize::try_from(value).ok())
+                .map(normalize_ai_data_dictionary_refresh_hours)
+                .unwrap_or_else(|| DesktopSettings::default().ai_data_dictionary_refresh_hours),
         })
     }
 
@@ -4620,6 +4646,7 @@ mod tests {
                 plugin_store_dir: Some("/tmp/dbx-plugins".to_string()),
                 agent_store_dir: Some("/tmp/dbx-agents".to_string()),
                 sidebar_table_page_size: DesktopSettings::default().sidebar_table_page_size,
+                ai_data_dictionary_refresh_hours: DesktopSettings::default().ai_data_dictionary_refresh_hours,
             })
             .await
             .unwrap();
@@ -4640,6 +4667,7 @@ mod tests {
                 plugin_store_dir: Some("/tmp/dbx-plugins".to_string()),
                 agent_store_dir: Some("/tmp/dbx-agents".to_string()),
                 sidebar_table_page_size: DesktopSettings::default().sidebar_table_page_size,
+                ai_data_dictionary_refresh_hours: DesktopSettings::default().ai_data_dictionary_refresh_hours,
             }
         );
     }
@@ -4695,6 +4723,27 @@ mod tests {
             .unwrap();
 
         assert_eq!(storage.load_desktop_settings().await.unwrap().duckdb_worker_max_processes, 8);
+    }
+
+    #[tokio::test]
+    async fn desktop_settings_normalize_data_dictionary_refresh_hours() {
+        let path = temp_db_path("desktop-settings-data-dictionary-refresh");
+        let storage = Storage::open(&path).await.unwrap();
+
+        storage
+            .save_desktop_settings(&DesktopSettings { ai_data_dictionary_refresh_hours: 2, ..DesktopSettings::default() })
+            .await
+            .unwrap();
+        assert_eq!(storage.load_desktop_settings().await.unwrap().ai_data_dictionary_refresh_hours, 2);
+
+        storage
+            .save_desktop_settings(&DesktopSettings { ai_data_dictionary_refresh_hours: 3, ..DesktopSettings::default() })
+            .await
+            .unwrap();
+        assert_eq!(
+            storage.load_desktop_settings().await.unwrap().ai_data_dictionary_refresh_hours,
+            DesktopSettings::default().ai_data_dictionary_refresh_hours
+        );
     }
 
     #[tokio::test]

@@ -55,6 +55,7 @@ import { useQueryStore } from "@/stores/queryStore";
 import { useToast } from "@/composables/useToast";
 import { useNavigationTargets } from "@/composables/useNavigationTargets";
 import { buildAiContext, runAgentStream, isVectorDbType, isValidActionForMode, defaultActionForMode, type AiAction, type AiAssistantMode, type AiSqlFileContext, type CustomPromptContext } from "@/lib/ai/ai";
+import { aiScopeAllowsAgentExecution, aiScopeAllowsExecution, aiScopeDatabases, aiScopeExecutionDatabase, parseAiDatabaseScope, type AiDatabaseScope } from "@/lib/ai/aiDatabaseScope";
 import { isAiConfigModelCandidate } from "@/lib/ai/aiConfigCandidates";
 import { orderAiConfigsForDisplay } from "@/lib/ai/aiConfigOrdering";
 import { effortSelectionEquals, runtimeEffortFromPreference } from "@/lib/ai/aiEffortPreference";
@@ -75,7 +76,7 @@ import type { AiMessage } from "@/lib/backend/api";
 import type { AiConfigItem, AiEffortCapability, AiEffortOption, AiEffortSelection } from "@/types/ai";
 import type { ConnectionConfig, QueryTab, SavedSqlFile, TableInfo } from "@/types/database";
 import { useDatabaseOptions } from "@/composables/useDatabaseOptions";
-import { decodeSelectableDatabaseValue, encodeSelectableDatabaseValue, formatDatabaseLabel, resolveDefaultDatabase } from "@/lib/database/defaultDatabase";
+import { encodeSelectableDatabaseValue, formatDatabaseLabel, resolveDefaultDatabase } from "@/lib/database/defaultDatabase";
 import { isSchemaAware } from "@/lib/database/databaseCapabilities";
 import ExplainPlanViewer from "@/components/explain/ExplainPlanViewer.vue";
 import { parseExplainResult, parseOracleExplainText, type ParsedExplainPlan } from "@/lib/diagram/explainPlan";
@@ -121,6 +122,7 @@ interface ChatMessage {
   role: "user" | "assistant";
   content: string;
   mentions?: AiMessageMention[];
+  databaseScope?: AiDatabaseScope;
   reasoning?: string;
   isThinking?: boolean;
   agentSteps?: AiAgentStepItem[];
@@ -134,10 +136,10 @@ const props = defineProps<{
 }>();
 
 const emit = defineEmits<{
-  replaceSql: [sql: string];
-  executeSql: [sql: string];
-  tempRunSql: [sql: string];
-  requestAutoExecuteSql: [sql: string];
+  replaceSql: [sql: string, database?: string];
+  executeSql: [sql: string, database?: string];
+  tempRunSql: [sql: string, database?: string];
+  requestAutoExecuteSql: [sql: string, database?: string];
   insertRedisCommand: [command: string];
   executeRedisCommand: [command: string];
   openExplainPlan: [sql: string];
@@ -156,6 +158,8 @@ const conversations = ref<AiConversation[]>([]);
 const showConversationList = ref(false);
 const showTemplateSelector = ref(false);
 const modeActionOpen = ref(false);
+const databaseScopeOpen = ref(false);
+const databaseScope = ref<AiDatabaseScope>({ mode: "current" });
 
 // Prompt template selection (panel-session scope)
 const activeTemplateIds = ref<string[]>([]);
@@ -603,7 +607,10 @@ const agentActionButtons: AiActionButton[] = [
   { action: "generate", icon: Wand2, key: "ai.actions.generateNoExec" },
 ];
 
-const actionButtons = computed<AiActionButton[]>(() => (assistantMode.value === "agent" ? agentActionButtons : askActionButtons));
+const actionButtons = computed<AiActionButton[]>(() => {
+  if (!aiScopeAllowsExecution(databaseScope.value, props.tab?.database || "")) return askActionButtons.slice(0, 1);
+  return assistantMode.value === "agent" ? agentActionButtons : askActionButtons;
+});
 const isRedisConnection = computed(() => props.connection?.db_type === "redis");
 
 // Vector DBs hide the action menu and only expose collection tools.
@@ -733,16 +740,25 @@ function clearPendingWriteGrant() {
   confirmedDatabase = undefined;
 }
 
-const productionContext = computed(() => productionContextForDatabase(props.connection, props.tab?.database));
+function productionContextForScope(scope: AiDatabaseScope) {
+  const databases = aiScopeDatabases(scope, props.tab?.database || "");
+  const fallback = productionContextForDatabase(props.connection, databases[0] || props.tab?.database);
+  return databases.map((database) => productionContextForDatabase(props.connection, database)).find((context) => context.active) ?? fallback;
+}
+
+const productionContext = computed(() => productionContextForScope(databaseScope.value));
 
 function sendProposalReply(positive: boolean) {
   // Disable while a stream is in flight or no proposal is currently active.
   if (isGenerating.value) return;
   const target = proposalConfirmMessage.value;
   if (!target) return;
-  if (positive && productionContext.value.active && looksLikeWriteSqlProposal(target.content)) {
+  // 2026-07-29 coder(lq): Confirmation belongs to the answer that proposed the
+  // SQL, not whatever database scope happens to be selected when it is clicked.
+  const targetScope = target.databaseScope ?? databaseScope.value;
+  if (positive && productionContextForScope(targetScope).active && looksLikeWriteSqlProposal(target.content)) {
     const sql = extractFirstSqlCodeBlock(target.content);
-    if (sql) emit("replaceSql", sql);
+    if (sql) emit("replaceSql", sql, aiScopeExecutionDatabase(targetScope, props.tab?.database || ""));
     toast(t("production.aiReviewRequired"), 5000);
     return;
   }
@@ -755,7 +771,7 @@ function sendProposalReply(positive: boolean) {
     if (confirmedWriteSqlText) {
       allowWriteSqlForNextRun = true;
       confirmedConnectionId = props.connection?.id;
-      confirmedDatabase = props.tab?.database || "";
+      confirmedDatabase = aiScopeExecutionDatabase(targetScope, props.tab?.database || "");
     }
     // When no SQL code block is found in the proposal, treat the
     // confirmation as rejected — we cannot bind the agent to a
@@ -783,6 +799,10 @@ const modeActionTriggerLabel = computed(() => {
 });
 
 function switchModeActionTab(mode: "ask" | "agent") {
+  if (mode === "agent" && !canUseAgentForDatabaseScope.value) {
+    toast(t("ai.databaseScopeAgentUnavailable"), 4000);
+    return;
+  }
   activeAction.value = resolveDefaultAction(mode);
   if (assistantMode.value !== mode) {
     // Set the mode after the action so the tab label and picker stay aligned.
@@ -817,16 +837,67 @@ const dbSelectOptions = computed(() => {
   }));
 });
 
-const selectedDatabaseSelectValue = computed(() => (props.connection ? encodeSelectableDatabaseValue(props.connection.db_type, props.tab?.database || "") : ""));
+const databaseScopeOptions = computed(() => {
+  const options = [...dbSelectOptions.value];
+  const current = props.tab?.database || "";
+  if (props.connection && current && !options.some((option) => option.database === current)) {
+    options.unshift({
+      database: current,
+      value: encodeSelectableDatabaseValue(props.connection.db_type, current),
+      label: formatDatabaseLabel(props.connection, current, {
+        defaultDatabase: t("editor.defaultDatabase"),
+        noDatabase: t("editor.noDatabase"),
+      }),
+    });
+  }
+  return options;
+});
 
-const selectedDatabaseLabel = computed(() => {
-  if (!props.connection) return t("editor.selectDatabase");
-  if (!props.tab) return t("editor.selectDatabase");
-  return formatDatabaseLabel(props.connection, props.tab.database || "", {
-    defaultDatabase: t("editor.defaultDatabase"),
-    noDatabase: t("editor.noDatabase"),
+const canExecuteAiSql = computed(() => aiScopeAllowsExecution(databaseScope.value, props.tab?.database || ""));
+const canUseAgentForDatabaseScope = computed(() => {
+  if (!props.connection) return false;
+  return aiScopeAllowsAgentExecution(databaseScope.value, props.tab?.database || "", props.connection.db_type);
+});
+
+const selectedDatabaseScopeLabel = computed(() => {
+  const connection = props.connection;
+  if (!connection || !props.tab) return t("editor.selectDatabase");
+  if (databaseScope.value.mode === "unscoped") return t("ai.databaseScopeUnscoped");
+  if (databaseScope.value.mode === "selected") {
+    const count = databaseScope.value.databases.length;
+    return count ? t("ai.databaseScopeSelectedCount", { count }) : t("ai.databaseScopeUnscoped");
+  }
+  return t("ai.databaseScopeCurrentWithName", {
+    database: formatDatabaseLabel(connection, props.tab.database || "", {
+      defaultDatabase: t("editor.defaultDatabase"),
+      noDatabase: t("editor.noDatabase"),
+    }),
   });
 });
+
+function selectCurrentDatabaseScope() {
+  databaseScope.value = { mode: "current" };
+  databaseScopeOpen.value = false;
+}
+
+function selectUnscopedDatabaseScope() {
+  databaseScope.value = { mode: "unscoped" };
+  assistantMode.value = "ask";
+  activeAction.value = "general";
+  databaseScopeOpen.value = false;
+}
+
+function toggleScopedDatabase(database: string) {
+  const selected = databaseScope.value.mode === "selected" ? databaseScope.value.databases : [];
+  databaseScope.value = {
+    mode: "selected",
+    databases: selected.includes(database) ? selected.filter((name) => name !== database) : [...selected, database],
+  };
+}
+
+function isScopedDatabaseSelected(database: string): boolean {
+  return databaseScope.value.mode === "selected" && databaseScope.value.databases.includes(database);
+}
 
 async function loadDatabases() {
   if (!props.connection) return;
@@ -855,12 +926,25 @@ async function changeConnection(connectionId: string) {
   }
 }
 
-function changeDatabase(value: string) {
-  const tab = props.tab;
-  const connection = props.connection;
-  if (!tab || !connection) return;
-  queryStore.updateDatabase(tab.id, decodeSelectableDatabaseValue(connection.db_type, value));
-}
+watch(
+  () => props.connection?.id,
+  () => {
+    // 2026-07-29 coder(lq): Database scope belongs to one connection only.
+    // Resetting here prevents a selection from leaking to another server.
+    databaseScope.value = { mode: "current" };
+  },
+);
+
+watch(canUseAgentForDatabaseScope, (allowed) => {
+  if (!allowed && assistantMode.value === "agent") {
+    assistantMode.value = "ask";
+    modeActionOpen.value = false;
+  }
+});
+
+watch(canExecuteAiSql, (allowed) => {
+  if (!allowed) activeAction.value = "general";
+});
 
 function flushAssistantDeltas() {
   assistantDeltaFrame = null;
@@ -1642,6 +1726,16 @@ async function send() {
     clearPendingWriteGrant();
     return;
   }
+  const requestedDatabaseScope: AiDatabaseScope = databaseScope.value.mode === "selected" ? { mode: "selected", databases: [...databaseScope.value.databases] } : { mode: databaseScope.value.mode };
+  const hasRequestedDatabaseScope = aiScopeAllowsExecution(requestedDatabaseScope, tab.database);
+  const requestedProductionContext = productionContextForScope(requestedDatabaseScope);
+  const requestedMode: AiAssistantMode = hasRequestedDatabaseScope ? assistantMode.value : "ask";
+  const requestedAction: AiAction = hasRequestedDatabaseScope ? activeAction.value : "general";
+  if (requestedMode === "agent" && !canUseAgentForDatabaseScope.value) {
+    clearPendingWriteGrant();
+    toast(t("ai.databaseScopeAgentUnavailable"), 4000);
+    return;
+  }
   if (!settings.isConfigured) {
     clearPendingWriteGrant();
     toast(t("ai.noConfig"));
@@ -1682,8 +1776,6 @@ async function send() {
   selectedSqlFileMentions.value = [];
   scrollToBottom({ force: true });
 
-  const requestedAction = activeAction.value;
-  const requestedMode = assistantMode.value;
   // Detect user-typed short confirmation (e.g. "可以"/"go ahead") as an alternative
   // path to the proposal ✅ button. Delegates to the shared pure function so the
   // component and its unit tests share the same gating logic.
@@ -1691,7 +1783,7 @@ async function send() {
     allowWriteSqlForNextRun = shouldGrantWriteSqlOnShortAffirmative({
       mode: requestedMode,
       alreadyGranted: false,
-      isProduction: productionContext.value.active,
+      isProduction: requestedProductionContext.active,
       userText: text,
       // Pass the history BEFORE the just-pushed user message so the function skips it.
       messages: messages.value.slice(0, -1),
@@ -1706,7 +1798,7 @@ async function send() {
         if (msg.role === "assistant" && msg.content) {
           confirmedWriteSqlText = extractSingleSqlCodeBlock(msg.content);
           confirmedConnectionId = connection.id;
-          confirmedDatabase = tab.database || "";
+          confirmedDatabase = aiScopeExecutionDatabase(requestedDatabaseScope, tab.database);
           break;
         }
         if (msg.role === "user") break;
@@ -1719,14 +1811,16 @@ async function send() {
   // Verify the connection/database haven't changed since the user confirmed
   // the write operation. If the user switched connections or databases between
   // confirmation and execution, the grant is void.
+  const requestedExecutionDatabase = aiScopeExecutionDatabase(requestedDatabaseScope, tab.database);
   if (allowWriteSqlForNextRun && confirmedWriteSqlText) {
-    if (confirmedConnectionId !== connection.id || confirmedDatabase !== (tab.database || "")) {
+    if (confirmedConnectionId !== connection.id || confirmedDatabase !== requestedExecutionDatabase) {
       allowWriteSqlForNextRun = false;
       confirmedWriteSqlText = undefined;
     }
   }
   // Agent confirmation cannot grant autonomous writes while the active database is production.
-  const allowWriteSql = requestedMode === "agent" && allowWriteSqlForNextRun && !productionContext.value.active;
+  const singleExecutionDatabase = aiScopeDatabases(requestedDatabaseScope, tab.database).length === 1;
+  const allowWriteSql = requestedMode === "agent" && singleExecutionDatabase && allowWriteSqlForNextRun && !requestedProductionContext.active;
   const confirmedWriteSql = allowWriteSql ? confirmedWriteSqlText : undefined;
   // Capture the confirmed target snapshot before clearing the one-shot grant
   // state, so the values survive to be passed through to the backend.
@@ -1736,7 +1830,9 @@ async function send() {
   confirmedWriteSqlText = undefined;
   confirmedConnectionId = undefined;
   confirmedDatabase = undefined;
-  messages.value.push({ role: "assistant", content: "" });
+  // 2026-07-29 coder(lq): Bind generated SQL controls to the scope used for
+  // that answer so later UI scope changes cannot redirect an older query.
+  messages.value.push({ role: "assistant", content: "", databaseScope: requestedDatabaseScope });
   const assistantIdx = messages.value.length - 1;
   const sessionId = uuid();
   currentSessionId.value = sessionId;
@@ -1747,6 +1843,7 @@ async function send() {
     const context = await buildAiContext(tab, connection, {
       mentionedTables,
       sqlFiles,
+      databaseScope: requestedDatabaseScope,
     });
     const history: AiMessage[] = messagesForAgentHistory(messages.value.slice(0, -2));
     await runAgentStream(
@@ -1827,7 +1924,9 @@ async function send() {
         database: tab.database,
       });
       if (msg && requestedMode === "agent") msg.agentSteps = buildAiAgentStepItems(agentPlan);
-      if (agentPlan.handoffSql) emit("requestAutoExecuteSql", agentPlan.handoffSql);
+      if (agentPlan.handoffSql && aiScopeAllowsExecution(requestedDatabaseScope, tab.database)) {
+        emit("requestAutoExecuteSql", agentPlan.handoffSql, aiScopeExecutionDatabase(requestedDatabaseScope, tab.database));
+      }
     }
     currentSessionId.value = "";
     // Apply deferred context compaction after streaming so assistantIdx stays stable.
@@ -1855,28 +1954,44 @@ async function cancelStream() {
   }
 }
 
-function applySql(code: string) {
+function messageDatabaseScope(message: ChatMessage): AiDatabaseScope {
+  return message.databaseScope ?? databaseScope.value;
+}
+
+function canExecuteMessageSql(message: ChatMessage): boolean {
+  return aiScopeAllowsExecution(messageDatabaseScope(message), props.tab?.database || "");
+}
+
+function applySql(code: string, scope: AiDatabaseScope = databaseScope.value) {
   if (isRedisConnection.value) {
     emit("insertRedisCommand", code);
     return;
   }
-  emit("replaceSql", code);
+  emit("replaceSql", code, aiScopeExecutionDatabase(scope, props.tab?.database || ""));
 }
 
-function executeSql(code: string) {
+function executeSql(code: string, scope: AiDatabaseScope = databaseScope.value) {
+  if (!aiScopeAllowsExecution(scope, props.tab?.database || "")) {
+    toast(t("ai.databaseScopeRequiredForExecution"), 4000);
+    return;
+  }
   if (isRedisConnection.value) {
     emit("executeRedisCommand", code);
     return;
   }
-  emit("executeSql", code);
+  emit("executeSql", code, aiScopeExecutionDatabase(scope, props.tab?.database || ""));
 }
 
-function tempRunSql(code: string) {
+function tempRunSql(code: string, scope: AiDatabaseScope = databaseScope.value) {
+  if (!aiScopeAllowsExecution(scope, props.tab?.database || "")) {
+    toast(t("ai.databaseScopeRequiredForExecution"), 4000);
+    return;
+  }
   if (isRedisConnection.value) {
     emit("executeRedisCommand", code);
     return;
   }
-  emit("tempRunSql", code);
+  emit("tempRunSql", code, aiScopeExecutionDatabase(scope, props.tab?.database || ""));
 }
 
 const copiedIndex = ref("");
@@ -1915,6 +2030,7 @@ async function persistConversation() {
       role: m.role,
       content: m.content,
       ...(m.mentions?.length ? { mentions: m.mentions } : {}),
+      ...(m.databaseScope ? { databaseScope: m.databaseScope } : {}),
       ...(m.reasoning ? { reasoning: m.reasoning } : {}),
       ...(m.kind ? { kind: m.kind } : {}),
     })),
@@ -1936,6 +2052,7 @@ function selectConversation(conv: AiConversation) {
     role: m.role as "user" | "assistant",
     content: m.content,
     mentions: Array.isArray(m.mentions) ? (m.mentions as AiMessageMention[]) : undefined,
+    databaseScope: parseAiDatabaseScope(m.databaseScope),
     reasoning: m.reasoning,
     kind: m.kind,
   }));
@@ -2272,13 +2389,28 @@ async function openExternalUrl(url: string) {
                       <!-- `pending` means the closing fence is still missing, so the code is truncated: never offer to run or apply it. -->
                       <Loader2 v-if="seg.pending && isGenerating" class="h-3 w-3 animate-spin text-zinc-400" />
                       <div class="flex items-center gap-1.5">
-                        <button v-if="!seg.pending && seg.isSql && !isRedisConnection" class="rounded p-0.5 text-zinc-500 hover:bg-zinc-200 hover:text-zinc-900 dark:text-zinc-400 dark:hover:bg-zinc-700 dark:hover:text-zinc-200" :title="t('ai.tempRunSql')" @click="tempRunSql(seg.content)">
+                        <button
+                          v-if="!seg.pending && seg.isSql && !isRedisConnection && canExecuteMessageSql(msg)"
+                          class="rounded p-0.5 text-zinc-500 hover:bg-zinc-200 hover:text-zinc-900 dark:text-zinc-400 dark:hover:bg-zinc-700 dark:hover:text-zinc-200"
+                          :title="t('ai.tempRunSql')"
+                          @click="tempRunSql(seg.content, messageDatabaseScope(msg))"
+                        >
                           <FlaskConical class="h-3.5 w-3.5" />
                         </button>
-                        <button v-if="!seg.pending && (seg.isSql || isRedisConnection)" class="rounded p-0.5 text-zinc-500 hover:bg-zinc-200 hover:text-zinc-900 dark:text-zinc-400 dark:hover:bg-zinc-700 dark:hover:text-zinc-200" :title="t('ai.executeSql')" @click="executeSql(seg.content)">
+                        <button
+                          v-if="!seg.pending && (seg.isSql || isRedisConnection) && canExecuteMessageSql(msg)"
+                          class="rounded p-0.5 text-zinc-500 hover:bg-zinc-200 hover:text-zinc-900 dark:text-zinc-400 dark:hover:bg-zinc-700 dark:hover:text-zinc-200"
+                          :title="t('ai.executeSql')"
+                          @click="executeSql(seg.content, messageDatabaseScope(msg))"
+                        >
                           <Play class="h-3.5 w-3.5" />
                         </button>
-                        <button v-if="!seg.pending && (seg.isSql || isRedisConnection)" class="rounded p-0.5 text-zinc-500 hover:bg-zinc-200 hover:text-zinc-900 dark:text-zinc-400 dark:hover:bg-zinc-700 dark:hover:text-zinc-200" :title="t('ai.apply')" @click="applySql(seg.content)">
+                        <button
+                          v-if="!seg.pending && (seg.isSql || isRedisConnection)"
+                          class="rounded p-0.5 text-zinc-500 hover:bg-zinc-200 hover:text-zinc-900 dark:text-zinc-400 dark:hover:bg-zinc-700 dark:hover:text-zinc-200"
+                          :title="t('ai.apply')"
+                          @click="applySql(seg.content, messageDatabaseScope(msg))"
+                        >
                           <Replace class="h-3.5 w-3.5" />
                         </button>
                         <button
@@ -2360,27 +2492,49 @@ async function openExternalUrl(url: string) {
               </Select>
               <template v-if="connection">
                 <Database class="h-3 w-3 shrink-0 text-foreground/40" />
-                <Select
-                  :model-value="selectedDatabaseSelectValue"
-                  @update:model-value="
-                    (v) => {
-                      if (typeof v === 'string') changeDatabase(v);
-                    }
-                  "
+                <Popover
+                  v-model:open="databaseScopeOpen"
                   @update:open="
                     (open: boolean) => {
                       if (open) loadDatabases();
                     }
                   "
                 >
-                  <SelectTrigger class="h-5 w-auto border-0 rounded-md bg-transparent dark:bg-transparent p-0 px-1 text-xs text-foreground/80 shadow-none focus:ring-0 focus-visible:ring-0 [&_svg]:size-3">
-                    <SelectValue :placeholder="t('editor.selectDatabase')">{{ selectedDatabaseLabel }}</SelectValue>
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem v-for="option in dbSelectOptions" :key="option.value" :value="option.value">{{ option.label }}</SelectItem>
-                    <SelectItem v-if="!dbSelectOptions.length && connection && tab" :value="selectedDatabaseSelectValue">{{ selectedDatabaseLabel }}</SelectItem>
-                  </SelectContent>
-                </Select>
+                  <PopoverTrigger as-child>
+                    <button type="button" class="flex h-5 max-w-52 items-center gap-1 rounded-md px-1 text-xs text-foreground/80 hover:bg-muted" :title="selectedDatabaseScopeLabel">
+                      <span class="truncate">{{ selectedDatabaseScopeLabel }}</span>
+                      <svg class="h-3 w-3 shrink-0 opacity-60" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m6 9 6 6 6-6" /></svg>
+                    </button>
+                  </PopoverTrigger>
+                  <PopoverContent align="start" class="w-72 gap-0 p-1.5" @click.stop>
+                    <button type="button" class="flex w-full items-start gap-2 rounded-sm px-2 py-1.5 text-xs hover:bg-muted" :class="{ 'bg-accent': databaseScope.mode === 'current' }" @click="selectCurrentDatabaseScope">
+                      <Check :class="databaseScope.mode === 'current' ? 'opacity-100' : 'opacity-0'" class="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                      <span class="min-w-0 text-left">
+                        <span class="block font-medium">{{ t("ai.databaseScopeCurrent") }}</span>
+                        <span class="block truncate text-[11px] text-muted-foreground">{{ tab?.database || t("editor.noDatabase") }}</span>
+                      </span>
+                    </button>
+                    <div class="my-1 border-t" />
+                    <div class="px-2 pb-1 pt-0.5 text-[11px] font-medium text-muted-foreground">{{ t("ai.databaseScopeSelected") }}</div>
+                    <div class="max-h-48 overflow-auto">
+                      <button v-for="option in databaseScopeOptions" :key="option.value" type="button" class="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-xs hover:bg-muted" @click="toggleScopedDatabase(option.database)">
+                        <span class="flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-sm border" :class="isScopedDatabaseSelected(option.database) ? 'border-primary bg-primary text-primary-foreground' : ''">
+                          <Check v-if="isScopedDatabaseSelected(option.database)" class="h-3 w-3" />
+                        </span>
+                        <span class="truncate">{{ option.label }}</span>
+                      </button>
+                      <div v-if="!databaseScopeOptions.length" class="px-2 py-2 text-xs text-muted-foreground">{{ t("ai.databaseScopeNoDatabases") }}</div>
+                    </div>
+                    <div class="my-1 border-t" />
+                    <button type="button" class="flex w-full items-start gap-2 rounded-sm px-2 py-1.5 text-xs hover:bg-muted" :class="{ 'bg-accent': databaseScope.mode === 'unscoped' }" @click="selectUnscopedDatabaseScope">
+                      <Check :class="databaseScope.mode === 'unscoped' ? 'opacity-100' : 'opacity-0'" class="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                      <span class="text-left">
+                        <span class="block font-medium">{{ t("ai.databaseScopeUnscoped") }}</span>
+                        <span class="block text-[11px] text-muted-foreground">{{ t("ai.databaseScopeUnscopedHint") }}</span>
+                      </span>
+                    </button>
+                  </PopoverContent>
+                </Popover>
               </template>
             </template>
             <span class="min-w-0 flex-1" />
@@ -2524,7 +2678,9 @@ async function openExternalUrl(url: string) {
                   <button
                     type="button"
                     class="flex-1 flex items-center justify-center gap-1.5 rounded-sm px-2 py-1 text-xs"
-                    :class="assistantMode === 'agent' ? 'bg-accent text-accent-foreground font-medium' : 'text-muted-foreground hover:text-foreground hover:bg-muted'"
+                    :class="[assistantMode === 'agent' ? 'bg-accent text-accent-foreground font-medium' : 'text-muted-foreground hover:text-foreground hover:bg-muted', !canUseAgentForDatabaseScope ? 'cursor-not-allowed opacity-50' : '']"
+                    :disabled="!canUseAgentForDatabaseScope"
+                    :title="!canUseAgentForDatabaseScope ? t('ai.databaseScopeAgentUnavailable') : undefined"
                     @click="switchModeActionTab('agent')"
                   >
                     <Bot class="h-3 w-3" />

@@ -38,6 +38,8 @@ function baseContext(overrides: Partial<AiContext> = {}): AiContext {
     connectionName: "prod-analytics",
     databaseType: "postgres",
     database: "warehouse",
+    databases: ["warehouse"],
+    databaseScope: "current",
     currentSql: "select user_id, count(*) from public.orders group by user_id",
     lastError: undefined,
     lastResultPreview: 'user_id="u1", count=3\nuser_id="u2", count=7',

@@ -45,6 +45,8 @@ function context(overrides: Partial<AiContext> = {}): AiContext {
     connectionName: "prod-analytics",
     databaseType: "postgres",
     database: "app",
+    databases: ["app"],
+    databaseScope: "current",
     currentSql: "",
     tables: [
       {

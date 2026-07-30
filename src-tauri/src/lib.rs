@@ -1266,6 +1266,7 @@ pub fn run() {
             app.manage(state.clone());
             app.manage(commands::redis_pubsub_server::start_pubsub_server(state.clone()));
             app.manage(commands::saved_sql::SavedSqlStorageState { data_dir: data_dir.clone() });
+            app.manage(commands::data_dictionary::DataDictionaryStorageState { data_dir: data_dir.clone() });
             app.manage(commands::external_sql::ExternalSqlOpenState::default());
             app.manage(commands::external_db::ExternalDbOpenState::default());
             app.manage(commands::deep_link::DeepLinkOpenState::default());
@@ -1456,6 +1457,8 @@ pub fn run() {
             commands::schema_cache::save_schema_cache,
             commands::schema_cache::load_schema_cache,
             commands::schema_cache::delete_schema_cache_prefix,
+            commands::data_dictionary::sync_ai_data_dictionary_markdown,
+            commands::data_dictionary::clear_ai_data_dictionary_markdown,
             commands::tab_runtime_cache::save_tab_runtime_cache,
             commands::tab_runtime_cache::load_tab_runtime_cache,
             commands::tab_runtime_cache::list_tab_runtime_cache_metadata,
