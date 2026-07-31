@@ -852,6 +852,7 @@ export interface TableStructureEditorViewport {
 }
 
 export type ObjectBrowserViewMode = "list" | "grid";
+export type ObjectBrowserObjectType = "tables" | "views" | "materializedViews" | "procedures" | "functions" | "triggers" | "sequences" | "packages" | "types";
 
 export interface ObjectBrowserViewport {
   scrollTop: number;
@@ -972,7 +973,7 @@ export interface QueryTab {
   objectBrowser?: {
     catalog?: string;
     schema?: string;
-    objectType?: "tables";
+    objectType?: ObjectBrowserObjectType;
     filterRequestId?: number;
     viewport?: ObjectBrowserViewport;
   };

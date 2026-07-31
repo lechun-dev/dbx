@@ -85,6 +85,35 @@ test("query tab display title uses custom title when present", () => {
   }
 });
 
+test("object browser tab title follows the selected object category", () => {
+  const restoreStorage = installMemoryStorage();
+  setActivePinia(createPinia());
+  useConnectionStore().addEphemeralConnection(conn("conn-1"));
+  const labels: Record<string, string> = {
+    "objects.tables": "表",
+    "objects.views": "视图",
+    "objects.functions": "函数",
+  };
+  const t = (key: string) => labels[key] || key;
+
+  try {
+    const tab = queryTab({
+      mode: "objects",
+      title: "public objects",
+      objectBrowser: { schema: "public", objectType: "tables" },
+    });
+    assert.equal(tabDisplayTitle(tab, t), "表");
+
+    tab.objectBrowser = { ...tab.objectBrowser, objectType: "views" };
+    assert.equal(tabDisplayTitle(tab, t), "视图");
+
+    tab.objectBrowser = { ...tab.objectBrowser, objectType: "functions" };
+    assert.equal(tabDisplayTitle(tab, t), "函数");
+  } finally {
+    restoreStorage();
+  }
+});
+
 test("jdbc tabs use the connection target when database is empty", () => {
   const restoreStorage = installMemoryStorage();
   setActivePinia(createPinia());

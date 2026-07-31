@@ -1,4 +1,4 @@
-import type { ObjectSourceKind, TreeNode, TreeNodeType } from "@/types/database";
+import type { ObjectBrowserObjectType, ObjectSourceKind, TreeNode, TreeNodeType } from "@/types/database";
 import { matchesShortcut, type ShortcutLikeEvent } from "@/lib/editor/keyboardShortcuts";
 
 export type TreeNodeRowAction = "open-data" | "open-source" | "open-object-browser" | "toggle" | "none";
@@ -9,7 +9,7 @@ export type SidebarActivation = "single" | "double";
 const dataNodeTypes = new Set<TreeNodeType>(["table", "view", "materialized_view"]);
 const documentBrowserNodeTypes = new Set<TreeNodeType>(["mongo-collection", "mongo-bucket"]);
 const toggleLeafNodeTypes = new Set<TreeNodeType>(["redis-db", "mq-tenant", "etcd-root", "etcd-dashboard", "zookeeper-root", "mongo-gridfs", "mongo-collection", "mongo-bucket", "vector-collection", "elasticsearch-index", "user-admin"]);
-const objectBrowserNodeTypes = new Set<TreeNodeType>(["database", "schema", "object-browser", "group-tables"]);
+const objectBrowserNodeTypes = new Set<TreeNodeType>(["database", "schema", "object-browser", "group-tables", "group-views", "group-materialized-views", "group-procedures", "group-functions", "group-triggers", "group-sequences", "group-packages", "group-types"]);
 const sourceNodeTypes = new Set<TreeNodeType>(["materialized_view", "procedure", "function", "trigger", "sequence", "package", "package-body", "type", "type-body"]);
 const savedSqlNodeTypes = new Set<TreeNodeType>(["saved-sql-file"]);
 const tableChildGroupNodeTypes = new Set<TreeNodeType>(["group-columns", "group-indexes", "group-fkeys", "group-triggers", "group-constraints", "group-partitions", "group-table-partitions", "group-table-subpartitions"]);
@@ -33,11 +33,24 @@ export function isDocumentBrowserTreeNode(type: TreeNodeType): boolean {
   return documentBrowserNodeTypes.has(type);
 }
 
+export function objectBrowserObjectTypeForTreeNode(type: TreeNodeType): ObjectBrowserObjectType | undefined {
+  if (type === "database" || type === "schema" || type === "group-tables") return "tables";
+  if (type === "group-views") return "views";
+  if (type === "group-materialized-views") return "materializedViews";
+  if (type === "group-procedures") return "procedures";
+  if (type === "group-functions") return "functions";
+  if (type === "group-triggers") return "triggers";
+  if (type === "group-sequences") return "sequences";
+  if (type === "group-packages") return "packages";
+  if (type === "group-types") return "types";
+  return undefined;
+}
+
 export function treeNodeRowAction(type: TreeNodeType, canExpand: boolean, activation: SidebarActivation = "single", canOpenObjectBrowser = false): TreeNodeRowAction {
   if (activation === "double") return "none";
-  // 2026-07-30 coder(lq): The tables group label navigates to the detailed list;
-  // its dedicated chevron remains responsible for expanding and collapsing the tree.
-  if (type === "group-tables" && canOpenObjectBrowser) return "open-object-browser";
+  // 2026-07-31 coder(lq): Object category labels navigate to their matching
+  // detail list; the dedicated chevron remains responsible for tree expansion.
+  if (objectBrowserNodeTypes.has(type) && canOpenObjectBrowser) return "open-object-browser";
   if (dataNodeTypes.has(type)) return "open-data";
   if (sourceNodeTypes.has(type)) return "open-source";
   if (toggleLeafNodeTypes.has(type)) return "toggle";

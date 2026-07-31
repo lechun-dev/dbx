@@ -56,7 +56,7 @@ describe("queryStore database open state", () => {
     expect(tab?.objectBrowser?.viewport).toBeUndefined();
   });
 
-  it("restores the table filter when an existing object browser is opened from the tables group", async () => {
+  it("restores the requested filter when an existing object browser is opened from an object group", async () => {
     const { useQueryStore } = await import("@/stores/queryStore");
     const store = useQueryStore();
 
@@ -70,6 +70,10 @@ describe("queryStore database open state", () => {
 
     store.openObjectBrowser("pg-1", "app", "public", undefined, "tables");
     expect(tab?.objectBrowser?.filterRequestId).toBe(2);
+
+    store.openObjectBrowser("pg-1", "app", "public", undefined, "views");
+    expect(tab?.objectBrowser?.objectType).toBe("views");
+    expect(tab?.objectBrowser?.filterRequestId).toBe(3);
   });
 
   it("keeps external catalog object browsers isolated", async () => {

@@ -226,11 +226,12 @@ const etcdKeyBrowserRef = ref<SearchableBrowserHandle>();
 const etcdDashboardRef = ref<{ refresh?: () => boolean }>();
 const zookeeperKeyBrowserRef = ref<SearchableBrowserHandle>();
 const objectBrowserRef = ref<SearchableBrowserHandle>();
-const activeTableMeta = computed(() => props.activeTab.tableMeta);
 const activeDataTabTableMeta = computed(() => tableMetaForDataTab(props.activeTab));
 const isCustomDataSql = computed(() => props.activeTab.mode === "data" && props.activeTab.dataSqlMode === "custom");
 const activeEffectiveDatabaseType = computed(() => effectiveDatabaseTypeForConnection(props.activeConnection));
-const activeDataTabExecutionDatabase = computed(() => dataTabExecutionDatabase(props.activeConnection, props.activeTab.database, activeDataTabTableMeta.value?.catalog));
+const activeDataGridTableMeta = computed(() => (isCustomDataSql.value ? props.activeTab.tableMeta : activeDataTabTableMeta.value));
+const activeDataGridEditable = computed(() => (isCustomDataSql.value ? !!props.activeTab.queryAnalysis : !props.activeTab.tableMetaPending && isTableDataEditable(activeEffectiveDatabaseType.value, activeDataTabTableMeta.value?.primaryKeys ?? [], activeDataTabTableMeta.value?.tableType)));
+const activeDataTabExecutionDatabase = computed(() => dataTabExecutionDatabase(props.activeConnection, props.activeTab.database, activeDataGridTableMeta.value?.catalog));
 const activeProductionContext = computed(() => productionContextForDatabase(props.activeConnection, props.activeTab.database));
 const productionWatermarkText = computed(() => (locale.value.startsWith("zh") ? "生产环境" : "PROD"));
 const productionSessionDetail = computed(() => {
@@ -1807,21 +1808,26 @@ defineExpose({ focusSearch, refreshData, refreshQueryEditorCompletionCache, hand
                 :initial-order-by-input="isCustomDataSql ? undefined : activeTab.orderByInput"
                 :sql="isCustomDataSql ? activeResultSql : activeTab.sql"
                 :loading="activeTab.isExecuting"
-                :editable="!isCustomDataSql && !activeTab.tableMetaPending && isTableDataEditable(activeEffectiveDatabaseType, activeTableMeta?.primaryKeys ?? [], activeTableMeta?.tableType)"
+                :editable="activeDataGridEditable"
+                :source-columns="isCustomDataSql ? activeTab.querySourceColumns : undefined"
+                :query-editability-reason="isCustomDataSql ? activeTab.queryEditabilityReason : undefined"
+                :allow-insert-rows="isCustomDataSql ? activeTab.queryAnalysis?.allowInsert !== false && activeTab.queryAnalysis?.allowInsertDelete !== false : undefined"
+                :allow-delete-rows="isCustomDataSql ? activeTab.queryAnalysis?.allowInsertDelete !== false : undefined"
                 :context="isCustomDataSql ? 'results' : 'table-data'"
                 :initial-where-input="isCustomDataSql ? undefined : activeTab.whereInput"
                 :database-type="activeEffectiveDatabaseType"
                 :connection-id="activeTab.connectionId"
                 :database="activeTab.database"
+                :schema="activeTab.schema"
                 :execution-database="activeDataTabExecutionDatabase"
-                :table-meta="isCustomDataSql ? undefined : activeDataTabTableMeta"
+                :table-meta="activeDataGridTableMeta"
                 :table-info-tab="activeTab.tableInfoTab"
                 :page-offset="activeTab.resultPageOffset"
                 :page-limit="activeTab.resultPageLimit"
                 :total-row-count="activeTab.resultTotalRowCount"
                 :total-row-count-is-exact="activeTab.resultTotalRowCount !== undefined || activeTab.result.total_is_exact !== false"
                 :total-row-count-loading="activeTab.resultTotalRowCountLoading"
-                :on-execute-sql="isCustomDataSql ? undefined : async (sql: string) => emit('executeSql', sql)"
+                :on-execute-sql="async (sql: string) => emit('executeSql', sql)"
                 :full-export-result="isCustomDataSql ? undefined : (onProgress?: (info: { rowsExported: number; totalRows: number | null }) => void) => queryStore.fetchTabResultForExport(activeTab.id, onProgress)"
                 :export-file-base-name="activeTab.title"
                 @update:where-input="(v: string) => (activeTab.whereInput = v)"

@@ -132,7 +132,20 @@ export function supportsObjectBrowserTreeNode(dbType: DatabaseType | undefined, 
   if (!supportsObjectBrowser(dbType)) return false;
   if (nodeType === "database" && usesDatabaseObjectTreeMode(dbType)) return true;
   if (nodeType === "database" && isSchemaAware(dbType) && dbType !== "sqlserver") return false;
-  return nodeType === "database" || nodeType === "schema" || nodeType === "object-browser" || nodeType === "group-tables";
+  return (
+    nodeType === "database" ||
+    nodeType === "schema" ||
+    nodeType === "object-browser" ||
+    nodeType === "group-tables" ||
+    nodeType === "group-views" ||
+    nodeType === "group-materialized-views" ||
+    nodeType === "group-procedures" ||
+    nodeType === "group-functions" ||
+    nodeType === "group-triggers" ||
+    nodeType === "group-sequences" ||
+    nodeType === "group-packages" ||
+    nodeType === "group-types"
+  );
 }
 
 export function supportsTableTruncate(dbType?: DatabaseType): boolean {

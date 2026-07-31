@@ -1,4 +1,4 @@
-import type { ObjectInfo, TreeNode, TreeNodeType } from "@/types/database";
+import type { ObjectBrowserObjectType, ObjectInfo, TreeNode, TreeNodeType } from "@/types/database";
 import { pinnedTreeNodeIdentityMatches, type PinnedTreeNodeIdentity } from "@/lib/app/pinnedItems";
 import { buildGroupedObjectTreeNodes, buildSimpleObjectTreeNodes, buildTableTreeNodes, compareDatabaseObjectNames, normalizeDatabaseObjectName } from "@/lib/table/tableTree";
 import { parseSlashDelimitedRegexQuery } from "@/lib/common/searchPattern";
@@ -24,7 +24,7 @@ export type ObjectBrowserRow = {
 
 export type ObjectBrowserSortKey = "name" | "type" | "estimatedRows" | "totalBytes" | "created_at" | "updated_at" | "comment";
 export type ObjectBrowserSortDirection = "asc" | "desc";
-export type ObjectBrowserFilter = "all" | "tables" | "views" | "materializedViews" | "procedures" | "functions" | "triggers" | "sequences" | "packages" | "types";
+export type ObjectBrowserFilter = "all" | ObjectBrowserObjectType;
 export type ObjectBrowserFilterCounts = Record<ObjectBrowserFilter, number>;
 
 export type ObjectBrowserPinnedTreeNodeContext = {

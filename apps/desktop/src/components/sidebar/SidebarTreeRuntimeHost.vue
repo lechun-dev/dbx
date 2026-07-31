@@ -60,7 +60,7 @@ import { useSettingsStore } from "@/stores/settingsStore";
 import { useSavedSqlStore } from "@/stores/savedSqlStore";
 import { useToast } from "@/composables/useToast";
 import { useDatabaseOptions } from "@/composables/useDatabaseOptions";
-import type { ColumnInfo, DatabaseType, TreeNode, TreeNodeType } from "@/types/database";
+import type { ColumnInfo, DatabaseType, ObjectBrowserObjectType, TreeNode, TreeNodeType } from "@/types/database";
 import * as api from "@/lib/backend/api";
 import { resolveDefaultDatabase } from "@/lib/database/defaultDatabase";
 import { canTreeNodePin, canTreeNodeShowExpander } from "@/lib/sidebar/sidebarTreeItemLayout";
@@ -87,7 +87,7 @@ import {
   supportsTableStructureEditing,
   usesTreeSchemaMode,
 } from "@/lib/database/databaseCapabilities";
-import { copyNameForTreeNode, isDocumentBrowserTreeNode, objectSourceKindForTreeNode, shouldRunTreeNodeRowAction, treeNodeRowAction, treeNodeRowDoubleClickAction } from "@/lib/sidebar/treeNodeClick";
+import { copyNameForTreeNode, isDocumentBrowserTreeNode, objectBrowserObjectTypeForTreeNode, objectSourceKindForTreeNode, shouldRunTreeNodeRowAction, treeNodeRowAction, treeNodeRowDoubleClickAction } from "@/lib/sidebar/treeNodeClick";
 import { dataTabOpenModeFromTreeClick, type DataTabOpenMode } from "@/lib/sidebar/dataTabOpenPolicy";
 import { isCopySidebarSelectionShortcut, isEditSidebarConnectionShortcut, isPasteSidebarSelectionShortcut } from "@/lib/editor/keyboardShortcuts";
 import { handleSidebarTreeDeleteShortcut } from "@/lib/sidebar/sidebarTreeDeleteShortcut";
@@ -704,7 +704,7 @@ function runRowClickAction(clickDetail: number) {
   if (action === "open-data") {
     scheduleOpenData(node);
   } else if (action === "open-object-browser") {
-    void openObjectBrowser("tables");
+    void openObjectBrowser(objectBrowserObjectTypeForTreeNode(node.type));
   } else if (action === "open-source") {
     openObjectSourceDialog(false);
   } else if (isDocumentBrowserTreeNode(node.type)) {
@@ -947,9 +947,9 @@ function onDoubleClick(event: MouseEvent) {
   if (dataTabOpenModeFromTreeClick(activeNode.value.type, event, settingsStore.editorSettings.shortcuts.openDataInNewTab) === "new-tab") return;
   const action = treeNodeRowDoubleClickAction(activeNode.value.type, canOpenObjectBrowser.value, settingsStore.editorSettings.sidebarActivation, canExpand.value);
   if (action === "open-object-browser") {
-    void openObjectBrowser(activeNode.value.type === "group-tables" ? "tables" : undefined);
+    void openObjectBrowser(objectBrowserObjectTypeForTreeNode(activeNode.value.type));
   } else if (action === "open-object-browser-and-expand") {
-    void openObjectBrowser(activeNode.value.type === "group-tables" ? "tables" : undefined);
+    void openObjectBrowser(objectBrowserObjectTypeForTreeNode(activeNode.value.type));
     if (!activeNode.value.isExpanded) void toggle();
   } else if (action === "open-data") {
     openDataImmediately(activeNode.value);
@@ -1017,7 +1017,7 @@ async function openSavedSqlFile() {
   void savedSqlStore.recordFileUsage(file.id);
 }
 
-async function openObjectBrowser(objectType?: "tables") {
+async function openObjectBrowser(objectType?: ObjectBrowserObjectType) {
   const node = activeNode.value;
   if (!node.connectionId) return;
   try {

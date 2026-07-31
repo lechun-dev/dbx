@@ -131,6 +131,65 @@ describe("queryStore hidden primary key editing", () => {
     expect(tab.queryEditabilityReason).toBeUndefined();
   });
 
+  it("makes safe custom SQL in a data tab editable through the query metadata pipeline", async () => {
+    const { useQueryStore } = await import("@/stores/queryStore");
+    const store = useQueryStore();
+    const tabId = store.createTab("mysql-1", "app", "users", "data");
+    const tab = store.tabs.find((item) => item.id === tabId)!;
+    tab.queryAnalysis = {
+      schema: undefined,
+      tableName: "stale_table",
+      selectStar: true,
+      columns: [],
+    };
+    tab.querySourceColumns = ["stale_id"];
+    tab.tableMeta = {
+      tableName: "stale_table",
+      columns: [],
+      primaryKeys: [],
+    };
+
+    await store.executeCurrentSql("SELECT name FROM users");
+
+    expect(tab.dataSqlMode).toBe("custom");
+    expect(executeMulti).toHaveBeenCalledWith("mysql-1", "app", "SELECT name, `id` AS `__DBX_PK_0` FROM users", undefined, expect.any(String), expect.objectContaining({ timeoutSecs: 30 }));
+    expect(tab.result?.hidden_column_indexes).toEqual([1]);
+    await vi.waitFor(() => expect(tab.querySourceColumns).toEqual(["name", "id"]));
+    expect(tab.queryAnalysis).toBeDefined();
+    expect(tab.queryAnalysis?.allowInsert).toBe(false);
+    expect(tab.queryEditabilityReason).toBeUndefined();
+    expect(tab.tableMeta?.tableName).toBe("users");
+  });
+
+  it("keeps unsafe custom SQL in a data tab read-only with the analysis reason", async () => {
+    analyzeEditableQueryEditability.mockResolvedValue({
+      editable: false,
+      reason: "aggregation",
+    });
+    executeMulti.mockResolvedValue([
+      {
+        columns: ["total"],
+        rows: [[1]],
+        affected_rows: 0,
+        execution_time_ms: 1,
+      },
+    ]);
+
+    const { useQueryStore } = await import("@/stores/queryStore");
+    const store = useQueryStore();
+    const tabId = store.createTab("mysql-1", "app", "users", "data");
+    const tab = store.tabs.find((item) => item.id === tabId)!;
+
+    await store.executeCurrentSql("SELECT COUNT(*) AS total FROM users");
+
+    expect(tab.dataSqlMode).toBe("custom");
+    expect(executeMulti).toHaveBeenCalledWith("mysql-1", "app", "SELECT COUNT(*) AS total FROM users", undefined, expect.any(String), expect.objectContaining({ timeoutSecs: 30 }));
+    await vi.waitFor(() => expect(tab.queryEditabilityReason).toBe("aggregation"));
+    expect(tab.queryAnalysis).toBeUndefined();
+    expect(tab.querySourceColumns).toBeUndefined();
+    expect(tab.tableMeta).toBeUndefined();
+  });
+
   it("starts a qualified MySQL star query before slow column metadata finishes", async () => {
     const columnsGate = deferred<Awaited<ReturnType<typeof getColumns>>>();
     getColumns.mockReturnValue(columnsGate.promise);

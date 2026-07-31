@@ -21,10 +21,17 @@ describe("ContentArea data SQL editor", () => {
     expect(contentAreaSource).toContain(':min-size="dataSqlEditorVisible ? 30 : 100"');
   });
 
-  it("keeps custom SQL results detached from table editing metadata", () => {
-    expect(contentAreaSource).toContain(':editable="!isCustomDataSql');
+  it("enables editing only after custom SQL resolves to safe query metadata", () => {
+    expect(contentAreaSource).toContain("isCustomDataSql.value");
+    expect(contentAreaSource).toContain("? !!props.activeTab.queryAnalysis");
+    expect(contentAreaSource).toContain(':editable="activeDataGridEditable"');
+    expect(contentAreaSource).toContain(':source-columns="isCustomDataSql ? activeTab.querySourceColumns : undefined"');
+    expect(contentAreaSource).toContain(':query-editability-reason="isCustomDataSql ? activeTab.queryEditabilityReason : undefined"');
+    expect(contentAreaSource).toContain(':allow-insert-rows="isCustomDataSql ? activeTab.queryAnalysis?.allowInsert !== false && activeTab.queryAnalysis?.allowInsertDelete !== false : undefined"');
+    expect(contentAreaSource).toContain(':allow-delete-rows="isCustomDataSql ? activeTab.queryAnalysis?.allowInsertDelete !== false : undefined"');
     expect(contentAreaSource).toContain(":context=\"isCustomDataSql ? 'results' : 'table-data'\"");
-    expect(contentAreaSource).toContain(':table-meta="isCustomDataSql ? undefined : activeDataTabTableMeta"');
+    expect(contentAreaSource).toContain(':table-meta="activeDataGridTableMeta"');
+    expect(contentAreaSource).toContain(":on-execute-sql=\"async (sql: string) => emit('executeSql', sql)\"");
     expect(contentAreaSource).toContain(':full-export-result="isCustomDataSql ? undefined');
     expect(contentAreaSource).toContain(':sql="isCustomDataSql ? activeResultSql : activeTab.sql"');
   });

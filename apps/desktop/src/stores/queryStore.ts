@@ -2,7 +2,7 @@ import { defineStore } from "pinia";
 import { uuid } from "@/lib/common/utils";
 import { computed, markRaw, onScopeDispose, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
-import type { ConnectionConfig, DatabaseType, IndexInfo, ObjectBrowserViewport, QueryResult, QueryTab, TableInfoTab, TableStructureEditorTarget } from "@/types/database";
+import type { ConnectionConfig, DatabaseType, IndexInfo, ObjectBrowserObjectType, ObjectBrowserViewport, QueryResult, QueryTab, TableInfoTab, TableStructureEditorTarget } from "@/types/database";
 import { orderPinnedFirst } from "@/lib/app/pinnedItems";
 import { canCancelQueryExecution } from "@/lib/sql/queryExecutionState";
 import { buildExplainSql, parseExplainResult, parseDamengExplainText, parseOracleExplainText, sqlServerExplainResult, type BuildExplainSqlResult } from "@/lib/diagram/explainPlan";
@@ -1247,7 +1247,7 @@ export const useQueryStore = defineStore("query", () => {
     return id;
   }
 
-  function openObjectBrowser(connectionId: string, database: string, schema?: string, catalog?: string, objectType?: "tables") {
+  function openObjectBrowser(connectionId: string, database: string, schema?: string, catalog?: string, objectType?: ObjectBrowserObjectType) {
     const title = catalog ? `${catalog}.${database} objects` : schema ? `${schema} objects` : `${database} objects`;
     const existing = tabs.value.find((tab) => tab.mode === "objects" && tab.connectionId === connectionId && tab.database === database && (tab.objectBrowser?.catalog || "") === (catalog || "") && (tab.objectBrowser?.schema || "") === (schema || ""));
     if (existing) {
@@ -2597,14 +2597,16 @@ export const useQueryStore = defineStore("query", () => {
     if (!activeTabId.value) return;
     const tab = tabs.value.find((item) => item.id === activeTabId.value);
     if (tab?.mode === "query") {
+      clearEditableQueryResultMetadata(tab);
       tab.resultSortColumn = undefined;
       tab.resultSortColumnIndex = undefined;
       tab.resultSortDirection = undefined;
       tab.resultSortMode = undefined;
       tab.resultSortedSql = undefined;
     } else if (tab?.mode === "data") {
-      // 2026-07-30 coder(lq): SQL executed from the data-page editor is detached from the original table editing target.
+      // 2026-07-31 coder(lq): Custom SQL replaces the original table target; safe editing is restored only after query-result metadata analysis succeeds.
       tab.dataSqlMode = "custom";
+      clearEditableQueryResultMetadata(tab);
       tab.whereInput = undefined;
       tab.orderByInput = undefined;
       tab.resultSortColumn = undefined;
@@ -2642,6 +2644,18 @@ export const useQueryStore = defineStore("query", () => {
     tab.queryEditabilityReason = patch.queryEditabilityReason;
     tab.mongoEditTarget = undefined;
     tab.tableMeta = patch.tableMeta;
+  }
+
+  function clearEditableQueryResultMetadata(tab: QueryTab) {
+    tab.queryAnalysis = undefined;
+    tab.querySourceColumns = undefined;
+    tab.queryEditabilityReason = undefined;
+    tab.mongoEditTarget = undefined;
+    tab.tableMeta = undefined;
+  }
+
+  function usesEditableQueryResultMetadata(tab: QueryTab): boolean {
+    return tab.mode === "query" || (tab.mode === "data" && tab.dataSqlMode === "custom");
   }
 
   function resolveEditableSourceMetadataTarget(tab: QueryTab, analysis: EditableQueryInfo, source: EditableQuerySource, conn: ConnectionConfig | undefined, dbType: string, executionDatabase: string): EditableSourceMetadataTarget {
@@ -2822,7 +2836,7 @@ export const useQueryStore = defineStore("query", () => {
   }
 
   async function buildQueryMetadataPatch(tab: QueryTab, sql: string, executionDatabase: string, traceId?: string, elapsed?: () => string, hiddenPrimaryKeys: HiddenPrimaryKeyProjection[] = []): Promise<QueryMetadataPatch | undefined> {
-    if (tab.mode !== "query") return;
+    if (!usesEditableQueryResultMetadata(tab)) return;
     if (!tab.result || !tab.result.columns.length) {
       return {
         queryAnalysis: undefined,
@@ -3669,7 +3683,8 @@ export const useQueryStore = defineStore("query", () => {
         return producedResult;
       }
 
-      if (tab.mode === "query") {
+      if (usesEditableQueryResultMetadata(tab)) {
+        // 2026-07-31 coder(lq): Data-page custom SQL shares the query editor's hidden-key and editability pipeline so only safely mapped rows become writable.
         const prepared = await prepareEditableQueryExecution(tab, sqlToExecute, conn, effectiveDbType, executionDatabase, traceId, elapsed);
         sqlToExecute = prepared.sql;
         queryMetadataSql = prepared.metadataSql;
@@ -3695,23 +3710,6 @@ export const useQueryStore = defineStore("query", () => {
           pagination,
           useAgentCursor,
           firstPageUsesActualSql: hiddenPrimaryKeys.length > 0,
-        });
-        sqlToExecute = plan.sqlToExecute;
-        pageSql = plan.pageSql;
-        pageLimit = plan.pageLimit;
-        pageOffset = plan.pageOffset;
-        countSql = plan.countSql;
-        useAgentResultSession = plan.useAgentResultSession;
-      } else if (tab.mode === "data" && tab.dataSqlMode === "custom") {
-        // 2026-07-30 coder(lq): Custom SQL in a data tab uses query pagination without inheriting the original table's edit metadata.
-        const pagination = options?.pagination ?? { limit: settingsStore.editorSettings.pageSize, offset: 0 };
-        const plan = await api.prepareQueryPaginationExecutionPlan({
-          sql: sqlToExecute,
-          queryBaseSql,
-          databaseType: effectiveDbType,
-          pagination,
-          useAgentCursor,
-          firstPageUsesActualSql: false,
         });
         sqlToExecute = plan.sqlToExecute;
         pageSql = plan.pageSql;
@@ -3924,7 +3922,7 @@ export const useQueryStore = defineStore("query", () => {
           backendMs: current.result?.execution_time_ms,
           elapsed: elapsed(),
         });
-        if (current.mode === "query" && current.result) {
+        if (usesEditableQueryResultMetadata(current) && current.result) {
           analyzeQueryMetadataInBackground(id, displayedQueryMetadataSql(current, queryMetadataSql), current.result, executionDatabase, traceId, elapsed, effectiveDbType, hiddenPrimaryKeys);
         }
       } else {
@@ -4426,7 +4424,7 @@ export const useQueryStore = defineStore("query", () => {
     tab.mongoEditTarget = undefined;
     syncActiveResultRunFromDisplayed(tab);
     const sourceStatement = tab.result?.sourceStatement;
-    if (tab.mode === "query" && sourceStatement && splitMongoCommandRanges(sourceStatement).length === 0) {
+    if (usesEditableQueryResultMetadata(tab) && sourceStatement && splitMongoCommandRanges(sourceStatement).length === 0) {
       const metadataStartedAt = performance.now();
       const connection = useConnectionStore().getConfig(tab.connectionId);
       const executionDatabase = dataTabExecutionDatabase(connection, tab.database, tab.catalog);
