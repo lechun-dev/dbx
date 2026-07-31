@@ -4,7 +4,7 @@ import { findConnectionGroupPath } from "@/lib/sidebar/sidebarLayout";
 import { splitMongoCommandRanges } from "@/lib/mongo/mongoShellCommand";
 import { executableStatementRanges, splitSqlStatementRanges, type SqlTextRange } from "@/lib/sql/sqlStatementRanges";
 import { sqlTextFingerprint } from "@/lib/sql/sqlTextFingerprint";
-import type { ConnectionConfig, DatabaseType, ObjectBrowserObjectType, QueryResult, QueryTab } from "@/types/database";
+import type { ConnectionConfig, DatabaseType, QueryResult, QueryTab } from "@/types/database";
 
 type Translate = (key: string, params?: Record<string, unknown>) => string;
 export type OutputView = "result" | "summary" | "explain" | "chart";
@@ -61,19 +61,6 @@ function queryTitle(tab: QueryTab): string | undefined {
   return undefined;
 }
 
-function objectBrowserTitleKey(objectType: ObjectBrowserObjectType | undefined): string {
-  if (objectType === "tables") return "objects.tables";
-  if (objectType === "views") return "objects.views";
-  if (objectType === "materializedViews") return "tree.materializedViews";
-  if (objectType === "procedures") return "objects.procedures";
-  if (objectType === "functions") return "objects.functions";
-  if (objectType === "triggers") return "tree.triggers";
-  if (objectType === "sequences") return "objects.sequences";
-  if (objectType === "packages") return "objects.packages";
-  if (objectType === "types") return "tree.types";
-  return "objects.all";
-}
-
 export function tabDisplayTitle(tab: QueryTab, t: Translate): string {
   const database = databaseDisplayNameForTab(tab.connectionId, tab.database, t);
   const settingsStore = useSettingsStore();
@@ -128,7 +115,9 @@ export function tabDisplayTitle(tab: QueryTab, t: Translate): string {
     return `${connectionDisplayName(tab.connectionId)}@keys`;
   }
   if (tab.mode === "objects") {
-    return t(objectBrowserTitleKey(tab.objectBrowser?.objectType));
+    // 2026-07-31 coder(lq): Keep the singleton navigation tab label stable
+    // while its connection, schema, catalog, and object-type context changes.
+    return t("tabs.objects");
   }
   if (tab.mode === "users") {
     if (compact) return t("tabs.users");

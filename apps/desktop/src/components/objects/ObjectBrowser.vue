@@ -2391,7 +2391,7 @@ onBeforeUnmount(() => {
 });
 
 watch(
-  [() => props.connection.id, () => props.database, () => props.schema],
+  [() => props.connection.id, () => props.database, () => props.catalog, () => props.schema],
   async () => {
     const contextEpoch = objectBrowserRowsLoadGuard.invalidate();
     selectedSchema.value = props.schema;

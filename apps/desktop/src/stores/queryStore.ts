@@ -78,6 +78,17 @@ const CANCEL_ACK_SETTLE_TIMEOUT_MS = 2_000;
 const SAVED_SQL_EDITOR_POSITION_PERSIST_DELAY_MS = 500;
 type CloseConfirmContext = "tab" | "batch" | "app";
 
+function orderTabsWithObjectBrowserFirst(items: QueryTab[]): QueryTab[] {
+  const objectBrowser = items.find((tab) => tab.mode === "objects");
+  const remaining = items.filter((tab) => tab.mode !== "objects");
+  if (!objectBrowser) return orderPinnedFirst(remaining, (tab) => !!tab.pinned);
+
+  // 2026-07-31 coder(lq): The object browser is a global navigation surface,
+  // so collapse legacy duplicates and keep it in the first regular-tab slot.
+  objectBrowser.pinned = undefined;
+  return [objectBrowser, ...orderPinnedFirst(remaining, (tab) => !!tab.pinned)];
+}
+
 function hasHiddenPhysicalRowKey(databaseType: DatabaseType | undefined, hiddenPrimaryKeys: HiddenPrimaryKeyProjection[]): boolean {
   return hiddenPrimaryKeys.some((projection) => !usesSyntheticRowIdKey(databaseType, [projection.sourceName]));
 }
@@ -1025,10 +1036,14 @@ export const useQueryStore = defineStore("query", () => {
   }
 
   function applyRestoredOpenTabs(restored: { tabs: QueryTab[]; activeTabId: string | null }) {
-    tabs.value = restored.tabs;
-    activeTabId.value = restored.activeTabId;
-    activeTabHistory.value = restored.activeTabId ? [restored.activeTabId] : [];
-    for (const tab of restored.tabs) {
+    const retainedObjectBrowser = restored.tabs.find((tab) => tab.mode === "objects");
+    if (retainedObjectBrowser) retainedObjectBrowser.title = t("tabs.objects");
+    const removedObjectBrowserIds = new Set(restored.tabs.filter((tab) => tab.mode === "objects" && tab.id !== retainedObjectBrowser?.id).map((tab) => tab.id));
+    tabs.value = orderTabsWithObjectBrowserFirst(restored.tabs);
+    const restoredActiveTabId = restored.activeTabId && removedObjectBrowserIds.has(restored.activeTabId) ? (retainedObjectBrowser?.id ?? null) : restored.activeTabId;
+    activeTabId.value = restoredActiveTabId && tabs.value.some((tab) => tab.id === restoredActiveTabId) ? restoredActiveTabId : (tabs.value[0]?.id ?? null);
+    activeTabHistory.value = activeTabId.value ? [activeTabId.value] : [];
+    for (const tab of tabs.value) {
       if (tab.mode === "data") void deleteTabResultSnapshot(tabResultCacheKey(tab.id));
     }
   }
@@ -1248,18 +1263,23 @@ export const useQueryStore = defineStore("query", () => {
   }
 
   function openObjectBrowser(connectionId: string, database: string, schema?: string, catalog?: string, objectType?: ObjectBrowserObjectType) {
-    const title = catalog ? `${catalog}.${database} objects` : schema ? `${schema} objects` : `${database} objects`;
-    const existing = tabs.value.find((tab) => tab.mode === "objects" && tab.connectionId === connectionId && tab.database === database && (tab.objectBrowser?.catalog || "") === (catalog || "") && (tab.objectBrowser?.schema || "") === (schema || ""));
+    const title = t("tabs.objects");
+    const existing = tabs.value.find((tab) => tab.mode === "objects");
     if (existing) {
-      if (objectType) {
-        // 2026-07-30 coder(lq): Incrementing the request lets a repeated sidebar
-        // navigation restore the table filter after the user viewed another object type.
-        existing.objectBrowser = {
-          ...existing.objectBrowser,
-          objectType,
-          filterRequestId: (existing.objectBrowser?.filterRequestId ?? 0) + 1,
-        };
-      }
+      existing.title = title;
+      existing.connectionId = connectionId;
+      existing.database = database;
+      existing.schema = schema;
+      existing.objectBrowser = {
+        catalog,
+        schema,
+        objectType,
+        // 2026-07-31 coder(lq): Reusing the global tab must still reapply the
+        // requested sidebar filter and discard viewport state from its old context.
+        filterRequestId: (existing.objectBrowser?.filterRequestId ?? 0) + 1,
+        viewport: undefined,
+      };
+      tabs.value = orderTabsWithObjectBrowserFirst(tabs.value);
       switchTab(existing.id);
       return existing.id;
     }
@@ -1283,7 +1303,7 @@ export const useQueryStore = defineStore("query", () => {
         filterRequestId: objectType ? 1 : undefined,
       },
     };
-    tabs.value.push(tab);
+    tabs.value = orderTabsWithObjectBrowserFirst([tab, ...tabs.value]);
     activeTabId.value = id;
     return id;
   }
@@ -2405,8 +2425,9 @@ export const useQueryStore = defineStore("query", () => {
   function togglePinnedTab(id: string) {
     const tab = tabs.value.find((t) => t.id === id);
     if (!tab) return;
+    if (tab.mode === "objects") return;
     tab.pinned = !tab.pinned;
-    tabs.value = orderPinnedFirst(tabs.value, (item) => !!item.pinned);
+    tabs.value = orderTabsWithObjectBrowserFirst(tabs.value);
   }
 
   function reorderTab(id: string, targetId: string, position: "before" | "after") {
@@ -2416,7 +2437,7 @@ export const useQueryStore = defineStore("query", () => {
     const [tab] = tabs.value.splice(fromIdx, 1);
     const newToIdx = tabs.value.findIndex((t) => t.id === targetId);
     tabs.value.splice(newToIdx + (position === "after" ? 1 : 0), 0, tab);
-    tabs.value = orderPinnedFirst(tabs.value, (item) => !!item.pinned);
+    tabs.value = orderTabsWithObjectBrowserFirst(tabs.value);
   }
 
   function updateDatabase(id: string, database: string) {

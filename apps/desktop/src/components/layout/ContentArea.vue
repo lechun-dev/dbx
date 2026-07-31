@@ -10,7 +10,6 @@ import { Splitpanes, Pane } from "splitpanes";
 import "splitpanes/dist/splitpanes.css";
 import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger, DropdownMenuSub, DropdownMenuSubTrigger, DropdownMenuSubContent, DropdownMenuPortal } from "@/components/ui/dropdown-menu";
 import { Switch } from "@/components/ui/switch";
 import LightTooltip from "@/components/ui/LightTooltip.vue";
@@ -71,7 +70,7 @@ import { TABLE_FONT_SIZE_MAX, TABLE_FONT_SIZE_MIN, useSettingsStore, type DataGr
 import { useToast } from "@/composables/useToast";
 import { isTauriRuntime } from "@/lib/backend/tauriRuntime";
 import { canCancelQueryExecution, queryExecutionLabelKey } from "@/lib/sql/queryExecutionState";
-import { databaseDisplayNameForTab, executionSummaryItems, queryResultExecutionSql, resultGridCacheKey, resultRunItems, resultSourceRange, resultSqlForGrid, statementExecutionMarkers, tabTooltipLines, tabularResultItems } from "@/lib/tabs/tabPresentation";
+import { executionSummaryItems, queryResultExecutionSql, resultGridCacheKey, resultRunItems, resultSourceRange, resultSqlForGrid, statementExecutionMarkers, tabularResultItems } from "@/lib/tabs/tabPresentation";
 import { defaultQueryResultArchiveFileName } from "@/lib/query/queryResultArchive";
 import { saveQueryResultArchiveFile } from "@/lib/query/queryResultArchiveFile";
 import { isTableDataEditable } from "@/lib/table/tableEditing";
@@ -1463,289 +1462,6 @@ defineExpose({ focusSearch, refreshData, refreshQueryEditorCompletionCache, hand
     <!-- Data mode: full-height grid -->
     <template v-else-if="activeTab.mode === 'data'">
       <div class="flex-1 min-h-0 flex flex-col">
-        <div class="h-9 shrink-0 border-b bg-background/80 px-3 flex items-center gap-2 text-xs">
-          <Tooltip>
-            <TooltipTrigger as-child>
-              <div class="flex min-w-0 items-center gap-2">
-                <span v-if="activeConnection?.name?.trim()" data-data-header-connection class="inline-flex max-w-48 min-w-0 items-center truncate rounded border border-border bg-muted/30 px-2 py-0.5 text-muted-foreground">
-                  {{ activeConnection.name }}
-                </span>
-                <span class="inline-flex max-w-48 min-w-0 items-center truncate rounded border border-border bg-muted/50 px-2 py-0.5 font-medium">
-                  {{ activeTab.tableMeta?.tableName || activeTab.title }}
-                </span>
-                <span class="inline-flex max-w-56 min-w-0 items-center truncate rounded border border-border bg-muted/30 px-2 py-0.5 text-muted-foreground">
-                  <template v-if="activeTab.tableMeta?.schema">{{ activeTab.tableMeta.schema }}@</template>{{ databaseDisplayNameForTab(activeTab.connectionId, activeTab.database, t) }}
-                </span>
-                <span v-if="activeTab.tableMeta" class="inline-flex shrink-0 items-center rounded border border-border bg-muted/30 px-2 py-0.5 font-medium text-muted-foreground tabular-nums"> {{ activeTab.tableMeta.columns.length }} {{ t("tree.columns") }} </span>
-              </div>
-            </TooltipTrigger>
-            <TooltipContent side="bottom" class="grid max-w-lg grid-cols-[auto_minmax(0,1fr)] gap-x-2 text-xs">
-              <template v-for="line in tabTooltipLines(activeTab, t)" :key="line.label">
-                <span class="text-muted-foreground">{{ line.label }}</span>
-                <span class="select-text break-all">{{ line.value }}</span>
-              </template>
-            </TooltipContent>
-          </Tooltip>
-          <span class="ml-auto" />
-          <Button variant="ghost" size="sm" class="h-5 shrink-0 gap-1 px-1.5 text-xs" :class="{ 'bg-accent text-foreground': dataSqlEditorVisible }" :title="t('grid.sqlEditor')" :aria-label="t('grid.sqlEditor')" :aria-pressed="dataSqlEditorVisible" @click="toggleDataSqlEditor">
-            <Code2 class="h-3.5 w-3.5" />
-            SQL
-          </Button>
-          <Popover v-if="activeTab.result?.columns.length">
-            <PopoverTrigger as-child>
-              <Button variant="ghost" size="sm" class="h-5 text-xs px-1.5 shrink-0" :class="{ 'bg-accent text-foreground': (dataGridRef?.hiddenColumnCount ?? 0) > 0 }">
-                <Columns3 class="h-3.5 w-3.5" />
-                {{ t("grid.columnVisibility") }}
-                <span v-if="(dataGridRef?.hiddenColumnCount ?? 0) > 0" class="tabular-nums"> {{ dataGridRef?.visibleColumnCount }}/{{ dataGridRef?.displayableColumnCount }} </span>
-              </Button>
-            </PopoverTrigger>
-            <PopoverContent align="end" class="w-64 max-w-[calc(100vw-2rem)] gap-0 overflow-hidden rounded-md border bg-popover p-0 text-popover-foreground shadow-xl" @click.stop @keydown.stop>
-              <div class="border-b bg-muted/40 px-2 py-1.5">
-                <div class="flex items-center justify-between gap-2">
-                  <div class="text-xs font-semibold">{{ t("grid.columnVisibility") }}</div>
-                  <div class="text-[10px] text-muted-foreground tabular-nums">{{ dataGridRef?.visibleColumnCount ?? 0 }}/{{ dataGridRef?.displayableColumnCount ?? 0 }}</div>
-                </div>
-              </div>
-              <div class="flex items-center gap-1.5 border-b px-2 py-1.5">
-                <Search class="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-                <input v-model="columnVisibilitySearch" autocapitalize="off" autocorrect="off" spellcheck="false" class="h-6 min-w-0 flex-1 bg-transparent text-xs outline-none placeholder:text-muted-foreground" :placeholder="t('grid.searchColumns')" />
-              </div>
-              <div class="max-h-72 overflow-auto py-0.5">
-                <button v-for="option in columnVisibilityOptions" :key="`${option.index}:${option.column}`" type="button" class="grid w-full grid-cols-[1.5rem_minmax(0,1fr)] items-center px-2 py-1 text-left text-xs hover:bg-accent" @click="dataGridRef?.toggleColumnVisibility(option.index)">
-                  <span class="flex h-4 w-4 items-center justify-center rounded border" :class="dataGridRef?.isColumnVisible(option.index) ? 'border-primary bg-primary text-primary-foreground' : 'border-border bg-background text-transparent'">
-                    <Check class="h-3 w-3 stroke-[3]" />
-                  </span>
-                  <span class="min-w-0">
-                    <span class="block truncate font-mono text-xs" :title="option.column">{{ option.column }}</span>
-                    <span v-if="option.comment" class="block truncate text-[11px] leading-4 text-muted-foreground" :title="option.comment">{{ option.comment }}</span>
-                  </span>
-                </button>
-                <div v-if="columnVisibilityOptions.length === 0" class="px-2 py-6 text-center text-xs text-muted-foreground">
-                  {{ t("grid.noSearchResults") }}
-                </div>
-              </div>
-              <div class="flex flex-col gap-1 border-t bg-muted/30 px-2 py-1.5">
-                <span class="text-[11px] leading-4 text-muted-foreground">{{ t("grid.columnVisibilityHint") }}</span>
-                <div class="flex items-center justify-end gap-1">
-                  <Button variant="ghost" size="sm" class="h-7 px-2 text-xs" :disabled="(dataGridRef?.displayableColumnCount ?? 0) <= 1" @click="dataGridRef?.invertColumnVisibility()">
-                    {{ t("grid.invertColumnVisibility") }}
-                  </Button>
-                  <Button variant="ghost" size="sm" class="h-7 px-2 text-xs" :disabled="!dataGridRef?.hasCustomColumnOrder" @click="dataGridRef?.resetColumnOrder()">
-                    {{ t("grid.resetColumnOrder") }}
-                  </Button>
-                  <Button variant="ghost" size="sm" class="h-7 px-2 text-xs" :disabled="(dataGridRef?.hiddenColumnCount ?? 0) === 0" @click="dataGridRef?.showAllColumns()">
-                    {{ t("grid.showAllColumns") }}
-                  </Button>
-                </div>
-              </div>
-            </PopoverContent>
-          </Popover>
-          <Button v-if="activeTab.result && activeTab.tableMeta && activeTab.connectionId" variant="ghost" size="sm" class="h-5 text-xs px-1.5 shrink-0" :class="{ 'bg-accent': dataGridRef?.showDdl }" @click="dataGridRef?.toggleDdl()"
-            ><TableProperties class="h-3.5 w-3.5" />{{ t("grid.tableInfo") }}</Button
-          >
-          <DropdownMenu v-if="!isCustomDataSql && activeTab.result && activeTab.tableMeta && activeTab.connectionId">
-            <DropdownMenuTrigger as-child>
-              <Button variant="ghost" size="sm" class="h-5 text-xs px-1.5 shrink-0" :title="t('tableToolbox.title')"><Toolbox class="h-3.5 w-3.5" />{{ t("tableToolbox.title") }}</Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" class="w-max min-w-44 gap-0 overflow-hidden rounded-md border bg-popover p-0 text-popover-foreground shadow-xl">
-              <div class="border-b bg-muted/40 px-3 py-2">
-                <div class="text-xs font-semibold">{{ t("tableToolbox.title") }}</div>
-              </div>
-              <div class="p-1">
-                <DropdownMenuItem class="gap-2" @click="handleTableDataGenerate">
-                  <Database class="h-4 w-4" />
-                  {{ t("tableToolbox.generateData") }}
-                </DropdownMenuItem>
-                <DropdownMenuItem class="gap-2" @click="handleTableImport">
-                  <Download class="h-4 w-4" />
-                  {{ t("tableToolbox.importData") }}
-                </DropdownMenuItem>
-                <DropdownMenuSub>
-                  <DropdownMenuSubTrigger class="gap-2">
-                    <Upload class="h-4 w-4" />
-                    {{ t("tableToolbox.exportData") }}
-                  </DropdownMenuSubTrigger>
-                  <DropdownMenuPortal>
-                    <DropdownMenuSubContent>
-                      <DropdownMenuItem @click="dataGridRef?.exportCsv()"> CSV </DropdownMenuItem>
-                      <DropdownMenuItem @click="dataGridRef?.exportJson()"> JSON </DropdownMenuItem>
-                      <DropdownMenuItem @click="dataGridRef?.exportSql()"> SQL INSERT </DropdownMenuItem>
-                      <DropdownMenuItem @click="dataGridRef?.exportXlsx()"> XLSX </DropdownMenuItem>
-                    </DropdownMenuSubContent>
-                  </DropdownMenuPortal>
-                </DropdownMenuSub>
-              </div>
-            </DropdownMenuContent>
-          </DropdownMenu>
-          <Popover v-if="activeTab.result?.columns.length">
-            <PopoverTrigger as-child>
-              <Button variant="ghost" size="icon" class="h-6 w-7 shrink-0 text-foreground hover:bg-accent" :title="t('grid.viewOptions')" :aria-label="t('grid.viewOptions')">
-                <Wrench class="h-4 w-4" />
-              </Button>
-            </PopoverTrigger>
-            <PopoverContent align="end" class="w-max min-w-44 max-w-[calc(100vw-2rem)] gap-0 overflow-hidden rounded-md border bg-popover p-0 text-popover-foreground shadow-xl" @click.stop @keydown.stop>
-              <div class="border-b bg-muted/40 px-3 py-2">
-                <div class="text-xs font-semibold">{{ t("grid.viewOptions") }}</div>
-              </div>
-              <div class="flex items-center justify-between gap-3 px-3 py-1.5 text-xs">
-                <div class="min-w-0 flex items-center gap-2 font-medium">
-                  <SquareDashed class="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-                  <span>{{ t("grid.renderMode") }}</span>
-                </div>
-                <LightTooltip :text="t('grid.renderModeHint')" side="left" :side-offset="6" :delay="0" :open-on-focus="false">
-                  <div class="grid w-32 grid-cols-2 rounded-md border bg-muted/40 p-0.5">
-                    <button
-                      type="button"
-                      class="h-5 min-w-0 truncate whitespace-nowrap rounded-[5px] px-2 text-xs transition-colors"
-                      :class="dataGridRenderMode === 'canvas' ? 'bg-background font-semibold text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'"
-                      @click="setDataGridRenderMode('canvas')"
-                    >
-                      {{ t("grid.canvasRenderMode") }}
-                    </button>
-                    <button
-                      type="button"
-                      class="h-5 min-w-0 truncate whitespace-nowrap rounded-[5px] px-2 text-xs transition-colors"
-                      :class="dataGridRenderMode === 'dom' ? 'bg-background font-semibold text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'"
-                      @click="setDataGridRenderMode('dom')"
-                    >
-                      {{ t("grid.domRenderMode") }}
-                    </button>
-                  </div>
-                </LightTooltip>
-              </div>
-              <div class="flex items-center justify-between gap-3 px-3 py-1.5 text-xs">
-                <div class="min-w-0 flex items-center gap-2 font-medium">
-                  <Columns3Cog class="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-                  <span>{{ t("grid.columnWidth") }}</span>
-                </div>
-                <div class="grid w-48 grid-cols-3 rounded-md border bg-muted/40 p-0.5">
-                  <button
-                    v-for="density in ['compact', 'standard', 'comfortable'] as const"
-                    :key="density"
-                    type="button"
-                    class="h-5 min-w-0 truncate whitespace-nowrap rounded-[5px] px-1.5 text-xs transition-colors"
-                    :class="columnWidthDensity === density ? 'bg-background font-semibold text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'"
-                    @click="setColumnWidthDensity(density)"
-                  >
-                    {{ t(`grid.columnWidth${density.charAt(0).toUpperCase()}${density.slice(1)}`) }}
-                  </button>
-                </div>
-              </div>
-              <DataGridFontFamilyControl />
-              <div class="flex items-center justify-between gap-3 px-3 py-1.5 text-xs">
-                <div class="min-w-0 flex items-center gap-2 font-medium">
-                  <span class="flex h-3.5 w-3.5 shrink-0 items-center justify-center text-[11px] font-semibold text-muted-foreground">A</span>
-                  <span>{{ t("grid.tableFontSize") }}</span>
-                </div>
-                <div class="flex h-6 w-32 items-center rounded-md border bg-muted/40 p-0.5">
-                  <button
-                    type="button"
-                    class="flex h-5 w-8 items-center justify-center rounded-[5px] bg-background text-foreground shadow-sm transition-colors hover:text-foreground disabled:pointer-events-none disabled:bg-muted/40 disabled:text-muted-foreground disabled:opacity-50 disabled:shadow-none"
-                    :disabled="tableFontSize <= TABLE_FONT_SIZE_MIN"
-                    :aria-label="t('common.decrease')"
-                    @click="decreaseTableFontSize"
-                  >
-                    <Minus class="h-3.5 w-3.5" />
-                  </button>
-                  <span class="flex-1 text-center text-xs font-semibold tabular-nums">{{ tableFontSize }}</span>
-                  <button
-                    type="button"
-                    class="flex h-5 w-8 items-center justify-center rounded-[5px] bg-background text-foreground shadow-sm transition-colors hover:text-foreground disabled:pointer-events-none disabled:bg-muted/40 disabled:text-muted-foreground disabled:opacity-50 disabled:shadow-none"
-                    :disabled="tableFontSize >= TABLE_FONT_SIZE_MAX"
-                    :aria-label="t('common.increase')"
-                    @click="increaseTableFontSize"
-                  >
-                    <Plus class="h-3.5 w-3.5" />
-                  </button>
-                </div>
-              </div>
-              <div class="flex items-center justify-between gap-3 px-3 py-1.5 text-xs">
-                <div class="min-w-0 flex items-center gap-2 font-medium">
-                  <Search class="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-                  <span>{{ t("grid.searchMode") }}</span>
-                </div>
-                <LightTooltip :text="t('grid.searchModeHint')" side="left" :side-offset="6" :delay="0" :open-on-focus="false">
-                  <div class="grid w-32 grid-cols-2 rounded-md border bg-muted/40 p-0.5">
-                    <button
-                      type="button"
-                      class="h-5 min-w-0 truncate whitespace-nowrap rounded-[5px] px-2 text-xs transition-colors"
-                      :class="dataGridSearchMode === 'filter' ? 'bg-background font-semibold text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'"
-                      @click="setDataGridSearchMode('filter')"
-                    >
-                      {{ t("grid.searchModeFilter") }}
-                    </button>
-                    <button
-                      type="button"
-                      class="h-5 min-w-0 truncate whitespace-nowrap rounded-[5px] px-2 text-xs transition-colors"
-                      :class="dataGridSearchMode === 'highlight' ? 'bg-background font-semibold text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'"
-                      @click="setDataGridSearchMode('highlight')"
-                    >
-                      {{ t("grid.searchModeHighlight") }}
-                    </button>
-                  </div>
-                </LightTooltip>
-              </div>
-              <div class="flex items-center justify-between gap-3 px-3 py-1.5 text-xs">
-                <div class="min-w-0 flex items-center gap-2 font-medium">
-                  <Rows3 class="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-                  <span>{{ t("grid.transposeMultiRowToggle") }}</span>
-                </div>
-                <LightTooltip :text="t('grid.transposeMultiRowHint')" side="left" :side-offset="6" :delay="0" :open-on-focus="false">
-                  <div class="grid w-32 grid-cols-2 rounded-md border bg-muted/40 p-0.5">
-                    <button
-                      type="button"
-                      class="h-5 min-w-0 truncate whitespace-nowrap rounded-[5px] px-2 text-xs transition-colors"
-                      :class="!dataGridRef?.multiRowTranspose ? 'bg-background font-semibold text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'"
-                      @click="dataGridRef?.setMultiRowTranspose(false)"
-                    >
-                      {{ t("grid.transposeSingleRow") }}
-                    </button>
-                    <button
-                      type="button"
-                      class="h-5 min-w-0 truncate whitespace-nowrap rounded-[5px] px-2 text-xs transition-colors"
-                      :class="dataGridRef?.multiRowTranspose ? 'bg-background font-semibold text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'"
-                      @click="dataGridRef?.setMultiRowTranspose(true)"
-                    >
-                      {{ t("grid.transposeMultiRow") }}
-                    </button>
-                  </div>
-                </LightTooltip>
-              </div>
-              <div class="flex items-center justify-between gap-3 px-3 py-1.5 text-xs">
-                <div class="min-w-0 flex items-center gap-2 font-medium">
-                  <component :is="numericColumnRightAlign ? AlignRight : AlignLeft" class="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-                  <span>{{ t("grid.numericColumnAlign") }}</span>
-                </div>
-                <div class="grid w-32 grid-cols-2 rounded-md border bg-muted/40 p-0.5">
-                  <button
-                    type="button"
-                    class="h-5 min-w-0 truncate whitespace-nowrap rounded-[5px] px-2 text-xs transition-colors"
-                    :class="!numericColumnRightAlign ? 'bg-background font-semibold text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'"
-                    @click="setNumericColumnRightAlign(false)"
-                  >
-                    {{ t("grid.numericColumnAlignLeft") }}
-                  </button>
-                  <button
-                    type="button"
-                    class="h-5 min-w-0 truncate whitespace-nowrap rounded-[5px] px-2 text-xs transition-colors"
-                    :class="numericColumnRightAlign ? 'bg-background font-semibold text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'"
-                    @click="setNumericColumnRightAlign(true)"
-                  >
-                    {{ t("grid.numericColumnAlignRight") }}
-                  </button>
-                </div>
-              </div>
-              <div class="flex items-center justify-between gap-3 px-3 py-1.5 text-xs" :class="{ 'opacity-60': !dataGridRef?.canToggleAllNullColumns }">
-                <span class="min-w-0 flex items-center gap-2 font-medium">
-                  <EyeOff class="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-                  {{ t("grid.hideNullColumns") }}
-                  <span v-if="(dataGridRef?.allNullColumnCount ?? 0) > 0" class="text-muted-foreground tabular-nums"> ({{ dataGridRef?.allNullColumnCount }}) </span>
-                </span>
-                <Switch size="sm" :model-value="!!dataGridRef?.nullColumnsHidden" :disabled="!dataGridRef?.canToggleAllNullColumns" :aria-label="t('grid.hideNullColumns')" @update:model-value="dataGridRef?.toggleAllNullColumns()" />
-              </div>
-            </PopoverContent>
-          </Popover>
-        </div>
         <Splitpanes horizontal class="query-output-splitpanes flex-1 min-h-0 overflow-hidden" @resized="onDataResultsResized">
           <Pane v-if="dataSqlEditorVisible" key="data-sql-editor" class="min-h-0" :size="dataEditorPaneSize" :min-size="15">
             <div class="relative flex h-full min-h-0 flex-col">
@@ -1838,6 +1554,296 @@ defineExpose({ focusSearch, refreshData, refreshQueryEditorCompletionCache, hand
                 @paginate="(offset: number, limit: number, whereInput?: string, orderBy?: string) => emit('paginate', offset, limit, whereInput, orderBy)"
                 @sort="(column: string, columnIndex: number, direction: 'asc' | 'desc' | null, whereInput?: string, mode?: DataGridSortMode) => emit('sort', column, columnIndex, direction, whereInput, mode)"
               >
+                <!-- 2026-07-31 coder(lq): Keep table-context actions in the data-grid toolbar so the data page does not spend a separate row on duplicated metadata. -->
+                <template #result-toolbar-actions="{ compact }">
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    :class="['data-grid-topbar-action-button h-5 shrink-0 px-1.5 text-xs', compact ? 'data-grid-topbar-action-button--compact' : '', dataSqlEditorVisible ? 'bg-accent text-foreground' : '']"
+                    :title="t('grid.sqlEditor')"
+                    :aria-label="t('grid.sqlEditor')"
+                    :aria-pressed="dataSqlEditorVisible"
+                    @click="toggleDataSqlEditor"
+                  >
+                    <Code2 class="data-grid-topbar-action-icon h-3 w-3" />
+                    <span class="data-grid-topbar-action-label" :class="{ 'data-grid-topbar-action-label--compact': compact }">SQL</span>
+                  </Button>
+                  <Popover v-if="activeTab.result?.columns.length">
+                    <PopoverTrigger as-child>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        :class="['data-grid-topbar-action-button h-5 shrink-0 px-1.5 text-xs', compact ? 'data-grid-topbar-action-button--compact' : '', (dataGridRef?.hiddenColumnCount ?? 0) > 0 ? 'bg-accent text-foreground' : '']"
+                        :title="t('grid.columnVisibility')"
+                        :aria-label="t('grid.columnVisibility')"
+                      >
+                        <Columns3 class="data-grid-topbar-action-icon h-3 w-3" />
+                        <span class="data-grid-topbar-action-label" :class="{ 'data-grid-topbar-action-label--compact': compact }">
+                          {{ t("grid.columnVisibility") }}
+                          <template v-if="(dataGridRef?.hiddenColumnCount ?? 0) > 0"> {{ dataGridRef?.visibleColumnCount }}/{{ dataGridRef?.displayableColumnCount }} </template>
+                        </span>
+                      </Button>
+                    </PopoverTrigger>
+                    <PopoverContent align="end" class="w-64 max-w-[calc(100vw-2rem)] gap-0 overflow-hidden rounded-md border bg-popover p-0 text-popover-foreground shadow-xl" @click.stop @keydown.stop>
+                      <div class="border-b bg-muted/40 px-2 py-1.5">
+                        <div class="flex items-center justify-between gap-2">
+                          <div class="text-xs font-semibold">{{ t("grid.columnVisibility") }}</div>
+                          <div class="text-[10px] text-muted-foreground tabular-nums">{{ dataGridRef?.visibleColumnCount ?? 0 }}/{{ dataGridRef?.displayableColumnCount ?? 0 }}</div>
+                        </div>
+                      </div>
+                      <div class="flex items-center gap-1.5 border-b px-2 py-1.5">
+                        <Search class="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                        <input v-model="columnVisibilitySearch" autocapitalize="off" autocorrect="off" spellcheck="false" class="h-6 min-w-0 flex-1 bg-transparent text-xs outline-none placeholder:text-muted-foreground" :placeholder="t('grid.searchColumns')" />
+                      </div>
+                      <div class="max-h-72 overflow-auto py-0.5">
+                        <button v-for="option in columnVisibilityOptions" :key="`${option.index}:${option.column}`" type="button" class="grid w-full grid-cols-[1.5rem_minmax(0,1fr)] items-center px-2 py-1 text-left text-xs hover:bg-accent" @click="dataGridRef?.toggleColumnVisibility(option.index)">
+                          <span class="flex h-4 w-4 items-center justify-center rounded border" :class="dataGridRef?.isColumnVisible(option.index) ? 'border-primary bg-primary text-primary-foreground' : 'border-border bg-background text-transparent'">
+                            <Check class="h-3 w-3 stroke-[3]" />
+                          </span>
+                          <span class="min-w-0">
+                            <span class="block truncate font-mono text-xs" :title="option.column">{{ option.column }}</span>
+                            <span v-if="option.comment" class="block truncate text-[11px] leading-4 text-muted-foreground" :title="option.comment">{{ option.comment }}</span>
+                          </span>
+                        </button>
+                        <div v-if="columnVisibilityOptions.length === 0" class="px-2 py-6 text-center text-xs text-muted-foreground">
+                          {{ t("grid.noSearchResults") }}
+                        </div>
+                      </div>
+                      <div class="flex flex-col gap-1 border-t bg-muted/30 px-2 py-1.5">
+                        <span class="text-[11px] leading-4 text-muted-foreground">{{ t("grid.columnVisibilityHint") }}</span>
+                        <div class="flex items-center justify-end gap-1">
+                          <Button variant="ghost" size="sm" class="h-7 px-2 text-xs" :disabled="(dataGridRef?.displayableColumnCount ?? 0) <= 1" @click="dataGridRef?.invertColumnVisibility()">
+                            {{ t("grid.invertColumnVisibility") }}
+                          </Button>
+                          <Button variant="ghost" size="sm" class="h-7 px-2 text-xs" :disabled="!dataGridRef?.hasCustomColumnOrder" @click="dataGridRef?.resetColumnOrder()">
+                            {{ t("grid.resetColumnOrder") }}
+                          </Button>
+                          <Button variant="ghost" size="sm" class="h-7 px-2 text-xs" :disabled="(dataGridRef?.hiddenColumnCount ?? 0) === 0" @click="dataGridRef?.showAllColumns()">
+                            {{ t("grid.showAllColumns") }}
+                          </Button>
+                        </div>
+                      </div>
+                    </PopoverContent>
+                  </Popover>
+                  <Button
+                    v-if="activeTab.result && activeTab.tableMeta && activeTab.connectionId"
+                    variant="ghost"
+                    size="sm"
+                    :class="['data-grid-topbar-action-button h-5 shrink-0 px-1.5 text-xs', compact ? 'data-grid-topbar-action-button--compact' : '', dataGridRef?.showDdl ? 'bg-accent' : '']"
+                    :title="t('grid.tableInfo')"
+                    :aria-label="t('grid.tableInfo')"
+                    @click="dataGridRef?.toggleDdl()"
+                  >
+                    <TableProperties class="data-grid-topbar-action-icon h-3 w-3" />
+                    <span class="data-grid-topbar-action-label" :class="{ 'data-grid-topbar-action-label--compact': compact }">{{ t("grid.tableInfo") }}</span>
+                  </Button>
+                  <DropdownMenu v-if="!isCustomDataSql && activeTab.result && activeTab.tableMeta && activeTab.connectionId">
+                    <DropdownMenuTrigger as-child>
+                      <Button variant="ghost" size="sm" :class="['data-grid-topbar-action-button h-5 shrink-0 px-1.5 text-xs', compact ? 'data-grid-topbar-action-button--compact' : '']" :title="t('tableToolbox.title')" :aria-label="t('tableToolbox.title')">
+                        <Toolbox class="data-grid-topbar-action-icon h-3 w-3" />
+                        <span class="data-grid-topbar-action-label" :class="{ 'data-grid-topbar-action-label--compact': compact }">{{ t("tableToolbox.title") }}</span>
+                      </Button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="end" class="w-max min-w-44 gap-0 overflow-hidden rounded-md border bg-popover p-0 text-popover-foreground shadow-xl">
+                      <div class="border-b bg-muted/40 px-3 py-2">
+                        <div class="text-xs font-semibold">{{ t("tableToolbox.title") }}</div>
+                      </div>
+                      <div class="p-1">
+                        <DropdownMenuItem class="gap-2" @click="handleTableDataGenerate">
+                          <Database class="h-4 w-4" />
+                          {{ t("tableToolbox.generateData") }}
+                        </DropdownMenuItem>
+                        <DropdownMenuItem class="gap-2" @click="handleTableImport">
+                          <Download class="h-4 w-4" />
+                          {{ t("tableToolbox.importData") }}
+                        </DropdownMenuItem>
+                        <DropdownMenuSub>
+                          <DropdownMenuSubTrigger class="gap-2">
+                            <Upload class="h-4 w-4" />
+                            {{ t("tableToolbox.exportData") }}
+                          </DropdownMenuSubTrigger>
+                          <DropdownMenuPortal>
+                            <DropdownMenuSubContent>
+                              <DropdownMenuItem @click="dataGridRef?.exportCsv()"> CSV </DropdownMenuItem>
+                              <DropdownMenuItem @click="dataGridRef?.exportJson()"> JSON </DropdownMenuItem>
+                              <DropdownMenuItem @click="dataGridRef?.exportSql()"> SQL INSERT </DropdownMenuItem>
+                              <DropdownMenuItem @click="dataGridRef?.exportXlsx()"> XLSX </DropdownMenuItem>
+                            </DropdownMenuSubContent>
+                          </DropdownMenuPortal>
+                        </DropdownMenuSub>
+                      </div>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                  <Popover v-if="activeTab.result?.columns.length">
+                    <PopoverTrigger as-child>
+                      <Button variant="ghost" size="sm" :class="['data-grid-topbar-action-button h-5 shrink-0 px-1.5 text-xs text-foreground hover:bg-accent', compact ? 'data-grid-topbar-action-button--compact' : '']" :title="t('grid.viewOptions')" :aria-label="t('grid.viewOptions')">
+                        <Wrench class="data-grid-topbar-action-icon h-3 w-3" />
+                        <span class="data-grid-topbar-action-label" :class="{ 'data-grid-topbar-action-label--compact': compact }">{{ t("grid.viewOptions") }}</span>
+                      </Button>
+                    </PopoverTrigger>
+                    <PopoverContent align="end" class="w-max min-w-44 max-w-[calc(100vw-2rem)] gap-0 overflow-hidden rounded-md border bg-popover p-0 text-popover-foreground shadow-xl" @click.stop @keydown.stop>
+                      <div class="border-b bg-muted/40 px-3 py-2">
+                        <div class="text-xs font-semibold">{{ t("grid.viewOptions") }}</div>
+                      </div>
+                      <div class="flex items-center justify-between gap-3 px-3 py-1.5 text-xs">
+                        <div class="min-w-0 flex items-center gap-2 font-medium">
+                          <SquareDashed class="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                          <span>{{ t("grid.renderMode") }}</span>
+                        </div>
+                        <LightTooltip :text="t('grid.renderModeHint')" side="left" :side-offset="6" :delay="0" :open-on-focus="false">
+                          <div class="grid w-32 grid-cols-2 rounded-md border bg-muted/40 p-0.5">
+                            <button
+                              type="button"
+                              class="h-5 min-w-0 truncate whitespace-nowrap rounded-[5px] px-2 text-xs transition-colors"
+                              :class="dataGridRenderMode === 'canvas' ? 'bg-background font-semibold text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'"
+                              @click="setDataGridRenderMode('canvas')"
+                            >
+                              {{ t("grid.canvasRenderMode") }}
+                            </button>
+                            <button
+                              type="button"
+                              class="h-5 min-w-0 truncate whitespace-nowrap rounded-[5px] px-2 text-xs transition-colors"
+                              :class="dataGridRenderMode === 'dom' ? 'bg-background font-semibold text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'"
+                              @click="setDataGridRenderMode('dom')"
+                            >
+                              {{ t("grid.domRenderMode") }}
+                            </button>
+                          </div>
+                        </LightTooltip>
+                      </div>
+                      <div class="flex items-center justify-between gap-3 px-3 py-1.5 text-xs">
+                        <div class="min-w-0 flex items-center gap-2 font-medium">
+                          <Columns3Cog class="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                          <span>{{ t("grid.columnWidth") }}</span>
+                        </div>
+                        <div class="grid w-48 grid-cols-3 rounded-md border bg-muted/40 p-0.5">
+                          <button
+                            v-for="density in ['compact', 'standard', 'comfortable'] as const"
+                            :key="density"
+                            type="button"
+                            class="h-5 min-w-0 truncate whitespace-nowrap rounded-[5px] px-1.5 text-xs transition-colors"
+                            :class="columnWidthDensity === density ? 'bg-background font-semibold text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'"
+                            @click="setColumnWidthDensity(density)"
+                          >
+                            {{ t(`grid.columnWidth${density.charAt(0).toUpperCase()}${density.slice(1)}`) }}
+                          </button>
+                        </div>
+                      </div>
+                      <DataGridFontFamilyControl />
+                      <div class="flex items-center justify-between gap-3 px-3 py-1.5 text-xs">
+                        <div class="min-w-0 flex items-center gap-2 font-medium">
+                          <span class="flex h-3.5 w-3.5 shrink-0 items-center justify-center text-[11px] font-semibold text-muted-foreground">A</span>
+                          <span>{{ t("grid.tableFontSize") }}</span>
+                        </div>
+                        <div class="flex h-6 w-32 items-center rounded-md border bg-muted/40 p-0.5">
+                          <button
+                            type="button"
+                            class="flex h-5 w-8 items-center justify-center rounded-[5px] bg-background text-foreground shadow-sm transition-colors hover:text-foreground disabled:pointer-events-none disabled:bg-muted/40 disabled:text-muted-foreground disabled:opacity-50 disabled:shadow-none"
+                            :disabled="tableFontSize <= TABLE_FONT_SIZE_MIN"
+                            :aria-label="t('common.decrease')"
+                            @click="decreaseTableFontSize"
+                          >
+                            <Minus class="h-3.5 w-3.5" />
+                          </button>
+                          <span class="flex-1 text-center text-xs font-semibold tabular-nums">{{ tableFontSize }}</span>
+                          <button
+                            type="button"
+                            class="flex h-5 w-8 items-center justify-center rounded-[5px] bg-background text-foreground shadow-sm transition-colors hover:text-foreground disabled:pointer-events-none disabled:bg-muted/40 disabled:text-muted-foreground disabled:opacity-50 disabled:shadow-none"
+                            :disabled="tableFontSize >= TABLE_FONT_SIZE_MAX"
+                            :aria-label="t('common.increase')"
+                            @click="increaseTableFontSize"
+                          >
+                            <Plus class="h-3.5 w-3.5" />
+                          </button>
+                        </div>
+                      </div>
+                      <div class="flex items-center justify-between gap-3 px-3 py-1.5 text-xs">
+                        <div class="min-w-0 flex items-center gap-2 font-medium">
+                          <Search class="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                          <span>{{ t("grid.searchMode") }}</span>
+                        </div>
+                        <LightTooltip :text="t('grid.searchModeHint')" side="left" :side-offset="6" :delay="0" :open-on-focus="false">
+                          <div class="grid w-32 grid-cols-2 rounded-md border bg-muted/40 p-0.5">
+                            <button
+                              type="button"
+                              class="h-5 min-w-0 truncate whitespace-nowrap rounded-[5px] px-2 text-xs transition-colors"
+                              :class="dataGridSearchMode === 'filter' ? 'bg-background font-semibold text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'"
+                              @click="setDataGridSearchMode('filter')"
+                            >
+                              {{ t("grid.searchModeFilter") }}
+                            </button>
+                            <button
+                              type="button"
+                              class="h-5 min-w-0 truncate whitespace-nowrap rounded-[5px] px-2 text-xs transition-colors"
+                              :class="dataGridSearchMode === 'highlight' ? 'bg-background font-semibold text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'"
+                              @click="setDataGridSearchMode('highlight')"
+                            >
+                              {{ t("grid.searchModeHighlight") }}
+                            </button>
+                          </div>
+                        </LightTooltip>
+                      </div>
+                      <div class="flex items-center justify-between gap-3 px-3 py-1.5 text-xs">
+                        <div class="min-w-0 flex items-center gap-2 font-medium">
+                          <Rows3 class="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                          <span>{{ t("grid.transposeMultiRowToggle") }}</span>
+                        </div>
+                        <LightTooltip :text="t('grid.transposeMultiRowHint')" side="left" :side-offset="6" :delay="0" :open-on-focus="false">
+                          <div class="grid w-32 grid-cols-2 rounded-md border bg-muted/40 p-0.5">
+                            <button
+                              type="button"
+                              class="h-5 min-w-0 truncate whitespace-nowrap rounded-[5px] px-2 text-xs transition-colors"
+                              :class="!dataGridRef?.multiRowTranspose ? 'bg-background font-semibold text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'"
+                              @click="dataGridRef?.setMultiRowTranspose(false)"
+                            >
+                              {{ t("grid.transposeSingleRow") }}
+                            </button>
+                            <button
+                              type="button"
+                              class="h-5 min-w-0 truncate whitespace-nowrap rounded-[5px] px-2 text-xs transition-colors"
+                              :class="dataGridRef?.multiRowTranspose ? 'bg-background font-semibold text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'"
+                              @click="dataGridRef?.setMultiRowTranspose(true)"
+                            >
+                              {{ t("grid.transposeMultiRow") }}
+                            </button>
+                          </div>
+                        </LightTooltip>
+                      </div>
+                      <div class="flex items-center justify-between gap-3 px-3 py-1.5 text-xs">
+                        <div class="min-w-0 flex items-center gap-2 font-medium">
+                          <component :is="numericColumnRightAlign ? AlignRight : AlignLeft" class="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                          <span>{{ t("grid.numericColumnAlign") }}</span>
+                        </div>
+                        <div class="grid w-32 grid-cols-2 rounded-md border bg-muted/40 p-0.5">
+                          <button
+                            type="button"
+                            class="h-5 min-w-0 truncate whitespace-nowrap rounded-[5px] px-2 text-xs transition-colors"
+                            :class="!numericColumnRightAlign ? 'bg-background font-semibold text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'"
+                            @click="setNumericColumnRightAlign(false)"
+                          >
+                            {{ t("grid.numericColumnAlignLeft") }}
+                          </button>
+                          <button
+                            type="button"
+                            class="h-5 min-w-0 truncate whitespace-nowrap rounded-[5px] px-2 text-xs transition-colors"
+                            :class="numericColumnRightAlign ? 'bg-background font-semibold text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'"
+                            @click="setNumericColumnRightAlign(true)"
+                          >
+                            {{ t("grid.numericColumnAlignRight") }}
+                          </button>
+                        </div>
+                      </div>
+                      <div class="flex items-center justify-between gap-3 px-3 py-1.5 text-xs" :class="{ 'opacity-60': !dataGridRef?.canToggleAllNullColumns }">
+                        <span class="min-w-0 flex items-center gap-2 font-medium">
+                          <EyeOff class="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                          {{ t("grid.hideNullColumns") }}
+                          <span v-if="(dataGridRef?.allNullColumnCount ?? 0) > 0" class="text-muted-foreground tabular-nums"> ({{ dataGridRef?.allNullColumnCount }}) </span>
+                        </span>
+                        <Switch size="sm" :model-value="!!dataGridRef?.nullColumnsHidden" :disabled="!dataGridRef?.canToggleAllNullColumns" :aria-label="t('grid.hideNullColumns')" @update:model-value="dataGridRef?.toggleAllNullColumns()" />
+                      </div>
+                    </PopoverContent>
+                  </Popover>
+                </template>
                 <template v-if="activeTab.result?.columns.includes('Error')" #error-actions="{ errorMessage }">
                   <QueryErrorActions :error-message="String(errorMessage)" :connection-id="activeTab.connectionId" @change-query-timeout="activeTab.connectionId && emit('openConnectionSettings', activeTab.connectionId, 'advanced')" @fix-with-ai="(message) => emit('fixWithAi', message)" />
                 </template>

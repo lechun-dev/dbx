@@ -287,6 +287,7 @@ function getTabMenuItems(tab: QueryTab): ContextMenuItem[] {
       action: () => queryStore.togglePinnedTab(tab.id),
       icon: Pin,
       iconClass: tab.pinned ? "fill-current" : "",
+      visible: tab.mode !== "objects",
     },
     { label: "", separator: true },
     { label: closeCurrentLabel, action: () => queryStore.closeTab(tab.id), icon: X },

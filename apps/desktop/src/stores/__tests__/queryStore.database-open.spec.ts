@@ -76,17 +76,54 @@ describe("queryStore database open state", () => {
     expect(tab?.objectBrowser?.filterRequestId).toBe(3);
   });
 
-  it("keeps external catalog object browsers isolated", async () => {
+  it("reuses one object browser across external catalogs", async () => {
     const { useQueryStore } = await import("@/stores/queryStore");
     const store = useQueryStore();
 
     const icebergTabId = store.openObjectBrowser("doris-1", "default", undefined, "iceberg_catalog");
     const hiveTabId = store.openObjectBrowser("doris-1", "default", undefined, "hive_catalog");
 
-    expect(hiveTabId).not.toBe(icebergTabId);
-    expect(store.tabs.find((tab) => tab.id === icebergTabId)?.objectBrowser?.catalog).toBe("iceberg_catalog");
-    expect(store.tabs.find((tab) => tab.id === hiveTabId)?.objectBrowser?.catalog).toBe("hive_catalog");
+    expect(hiveTabId).toBe(icebergTabId);
+    expect(store.tabs.filter((tab) => tab.mode === "objects")).toHaveLength(1);
+    expect(store.tabs[0]?.objectBrowser?.catalog).toBe("hive_catalog");
     expect(store.openObjectBrowser("doris-1", "default", undefined, "iceberg_catalog")).toBe(icebergTabId);
+    expect(store.tabs[0]?.objectBrowser?.catalog).toBe("iceberg_catalog");
+  });
+
+  it("keeps the global object browser first while its context changes", async () => {
+    const { useQueryStore } = await import("@/stores/queryStore");
+    const store = useQueryStore();
+
+    const queryId = store.createTab("pg-1", "app", "Query");
+    const objectBrowserId = store.openObjectBrowser("pg-1", "app", "public", undefined, "tables");
+    store.updateObjectBrowserViewport(objectBrowserId, { scrollTop: 420, viewMode: "grid" });
+    const dataId = store.createTab("pg-1", "app", "users", "data", "public");
+
+    const reusedId = store.openObjectBrowser("pg-2", "analytics", "archive", "warehouse", "views");
+    const objectBrowser = store.tabs.find((tab) => tab.id === objectBrowserId);
+
+    expect(reusedId).toBe(objectBrowserId);
+    expect(store.tabs.map((tab) => tab.id)).toEqual([objectBrowserId, queryId, dataId]);
+    expect(objectBrowser).toMatchObject({
+      title: "tabs.objects",
+      connectionId: "pg-2",
+      database: "analytics",
+      schema: "archive",
+      objectBrowser: {
+        catalog: "warehouse",
+        schema: "archive",
+        objectType: "views",
+        filterRequestId: 2,
+      },
+    });
+    expect(objectBrowser?.objectBrowser?.viewport).toBeUndefined();
+
+    store.reorderTab(objectBrowserId, dataId, "after");
+    expect(store.tabs[0]?.id).toBe(objectBrowserId);
+    store.reorderTab(queryId, objectBrowserId, "before");
+    expect(store.tabs[0]?.id).toBe(objectBrowserId);
+    store.togglePinnedTab(objectBrowserId);
+    expect(objectBrowser?.pinned).toBeUndefined();
   });
 
   it("keeps external catalog structure editors isolated", async () => {
@@ -221,6 +258,59 @@ describe("queryStore database open state", () => {
 
     expect(store.tabs.some((tab) => tab.id === dataId)).toBe(false);
     expect(store.tabs.some((tab) => tab.id === structureId)).toBe(false);
+  });
+
+  it("collapses restored object browser duplicates and keeps the active context", async () => {
+    vi.resetModules();
+    vi.unstubAllGlobals();
+    const storage = installLocalStorage();
+    storage.set(
+      "dbx-app-state:open_tabs",
+      JSON.stringify({
+        tabs: [
+          {
+            id: "query-1",
+            title: "Query",
+            connectionId: "pg-1",
+            database: "app",
+            sql: "select 1",
+            mode: "query",
+          },
+          {
+            id: "objects-1",
+            title: "public objects",
+            connectionId: "pg-1",
+            database: "app",
+            schema: "public",
+            sql: "",
+            mode: "objects",
+            objectBrowser: { schema: "public", objectType: "tables" },
+          },
+          {
+            id: "objects-2",
+            title: "archive objects",
+            connectionId: "pg-2",
+            database: "analytics",
+            schema: "archive",
+            sql: "",
+            mode: "objects",
+            pinned: true,
+            objectBrowser: { schema: "archive", objectType: "views" },
+          },
+        ],
+        activeTabId: "objects-2",
+      }),
+    );
+    setActivePinia(createPinia());
+
+    const { useQueryStore } = await import("@/stores/queryStore");
+    const store = useQueryStore();
+    await store.initOpenTabs();
+
+    expect(store.tabs.map((tab) => tab.id)).toEqual(["objects-1", "query-1"]);
+    expect(store.tabs[0]?.title).toBe("tabs.objects");
+    expect(store.tabs[0]?.pinned).toBeUndefined();
+    expect(store.activeTabId).toBe("objects-1");
   });
 
   it("does not restore open tabs when launch restore mode is none", async () => {

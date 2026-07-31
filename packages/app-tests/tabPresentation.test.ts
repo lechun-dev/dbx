@@ -85,14 +85,12 @@ test("query tab display title uses custom title when present", () => {
   }
 });
 
-test("object browser tab title follows the selected object category", () => {
+test("object browser tab title stays fixed while the selected category changes", () => {
   const restoreStorage = installMemoryStorage();
   setActivePinia(createPinia());
   useConnectionStore().addEphemeralConnection(conn("conn-1"));
   const labels: Record<string, string> = {
-    "objects.tables": "表",
-    "objects.views": "视图",
-    "objects.functions": "函数",
+    "tabs.objects": "对象",
   };
   const t = (key: string) => labels[key] || key;
 
@@ -102,13 +100,13 @@ test("object browser tab title follows the selected object category", () => {
       title: "public objects",
       objectBrowser: { schema: "public", objectType: "tables" },
     });
-    assert.equal(tabDisplayTitle(tab, t), "表");
+    assert.equal(tabDisplayTitle(tab, t), "对象");
 
     tab.objectBrowser = { ...tab.objectBrowser, objectType: "views" };
-    assert.equal(tabDisplayTitle(tab, t), "视图");
+    assert.equal(tabDisplayTitle(tab, t), "对象");
 
     tab.objectBrowser = { ...tab.objectBrowser, objectType: "functions" };
-    assert.equal(tabDisplayTitle(tab, t), "函数");
+    assert.equal(tabDisplayTitle(tab, t), "对象");
   } finally {
     restoreStorage();
   }
