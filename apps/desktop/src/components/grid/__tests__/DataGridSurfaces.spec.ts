@@ -485,13 +485,8 @@ describe("DataGridFilterBuilder", () => {
 describe("DataGridQueryControls", () => {
   it("gives filter rules enough horizontal space for longer column names", () => {
     const mounted = mountComponent(DataGridQueryControls, {
-      whereInput: "",
-      orderByInput: "",
       columns: ["appointmentStatusWithAnExceptionallyLongName"],
-      conditionColumns: ["appointmentStatusWithAnExceptionallyLongName"],
-      historyScope: {},
       canUseWhereSearch: true,
-      compact: false,
       leadingBorder: false,
       filterBuilderOpen: true,
       filterButtonActive: false,
@@ -503,9 +498,6 @@ describe("DataGridQueryControls", () => {
       filteredColumns: ["appointmentStatusWithAnExceptionallyLongName"],
       modeOptions: [{ value: "equals", labelKey: "equals" }],
       columnSearch: "",
-      applyWhere: vi.fn(),
-      applyOrderBy: vi.fn(),
-      clearOrderBy: vi.fn(),
     });
     const popoverContent = findOne(mounted.root, (node) => node.props["data-stub"] === "PopoverContent");
 
@@ -513,18 +505,13 @@ describe("DataGridQueryControls", () => {
     expect(String(popoverContent.props.class)).toContain("max-w-[calc(100vw-24px)]");
   });
 
-  it("keeps filter actions available in the popover", () => {
+  it("keeps visual filter actions and removes the redundant condition editors", () => {
     const clearFilters = vi.fn();
     const applyFilters = vi.fn();
     const resetFilters = vi.fn();
     const mounted = mountComponent(DataGridQueryControls, {
-      whereInput: "id = 1",
-      orderByInput: "",
       columns: ["id"],
-      conditionColumns: ["id"],
-      historyScope: {},
       canUseWhereSearch: true,
-      compact: false,
       leadingBorder: false,
       filterBuilderOpen: true,
       filterButtonActive: true,
@@ -536,9 +523,6 @@ describe("DataGridQueryControls", () => {
       filteredColumns: ["id"],
       modeOptions: [{ value: "equals", labelKey: "equals" }],
       columnSearch: "",
-      applyWhere: vi.fn(),
-      applyOrderBy: vi.fn(),
-      clearOrderBy: vi.fn(),
       onClearFilters: clearFilters,
       onApplyFilters: applyFilters,
       onResetFilters: resetFilters,
@@ -556,13 +540,9 @@ describe("DataGridQueryControls", () => {
       findOne(mounted.root, (node) => node.type === "button" && hostText(node) === "grid.applyFilter"),
       "click",
     );
-    const whereInput = findOne(mounted.root, (node) => node.type === "textarea" && node.props.placeholder === "WHERE");
-    const whereControl = whereInput.parent?.parent;
-    expect(whereControl).toBeTruthy();
-    const whereButtons = findAll(whereControl!, (node) => node.type === "button");
-    dispatch(whereButtons[whereButtons.length - 1], "click");
 
-    expect(clearFilters).toHaveBeenCalledTimes(2);
+    expect(findAll(mounted.root, (node) => node.type === "textarea")).toHaveLength(0);
+    expect(clearFilters).toHaveBeenCalledOnce();
     expect(resetFilters).toHaveBeenCalledOnce();
     expect(applyFilters).toHaveBeenCalledOnce();
   });
