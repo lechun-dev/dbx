@@ -2356,6 +2356,7 @@ export default withEnglishFallback({
     statisticsHint: "Stimato dalle statistiche del database; COUNT(*) non viene eseguito.",
     createdAt: "Creato",
     updatedAt: "Aggiornato",
+    lastUsed: "Ultimo utilizzo",
     source: "Codice Sorgente",
     saveSource: "Salva",
     cancelEdit: "Annulla",

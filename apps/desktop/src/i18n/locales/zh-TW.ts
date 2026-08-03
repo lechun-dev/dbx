@@ -2227,6 +2227,7 @@ export default withEnglishFallback({
     statisticsHint: "來自資料庫統計資訊的估算值，不執行 COUNT(*)。",
     createdAt: "建立時間",
     updatedAt: "更新時間",
+    lastUsed: "最近使用",
     source: "原始碼",
     saveSource: "儲存",
     cancelEdit: "取消",

@@ -2506,6 +2506,7 @@ export default withEnglishFallback({
     statisticsHint: "来自数据库统计信息的估算值，不执行 COUNT(*)。",
     createdAt: "创建时间",
     updatedAt: "更新时间",
+    lastUsed: "最近使用",
     source: "源代码",
     saveSource: "保存",
     cancelEdit: "取消",

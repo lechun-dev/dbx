@@ -2358,6 +2358,7 @@ export default withEnglishFallback({
     statisticsHint: "Estimado desde estadísticas de la base de datos; no se ejecuta COUNT(*).",
     createdAt: "Creado",
     updatedAt: "Actualizado",
+    lastUsed: "Uso reciente",
     source: "Código fuente",
     saveSource: "Guardar",
     cancelEdit: "Cancelar",

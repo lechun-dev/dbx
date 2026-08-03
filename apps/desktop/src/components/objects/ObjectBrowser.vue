@@ -124,6 +124,7 @@ import { createObjectBrowserRowsLoadGuard, type ObjectBrowserRowsLoadHandle } fr
 
 type ObjectFilter = ObjectBrowserFilter;
 type ObjectBrowserColumnKey = "select" | "name" | "type" | "estimatedRows" | "totalBytes" | "created_at" | "updated_at" | "comment";
+type ObjectBrowserRecentUsageRecord = Record<string, number>;
 
 const props = defineProps<{
   connection: ConnectionConfig;
@@ -155,6 +156,7 @@ const refreshTooltip = computed(() => {
 const schemas = ref<string[]>([]);
 const selectedSchema = ref<string | undefined>(props.schema);
 const rows = ref<ObjectBrowserRow[]>([]);
+const objectBrowserRecentUsageVersion = ref(0);
 const rootRef = ref<HTMLElement>();
 const search = ref("");
 const objectFilter = ref<ObjectFilter>(props.objectType ?? "all");
@@ -265,6 +267,10 @@ const canTruncateTargetCascade = computed(() => !!truncateTarget.value && suppor
 const objectCounts = computed(() => countObjectBrowserRowsByFilter(rows.value));
 // Count direct search matches once; partition parents rendered only for context must not inflate badges.
 const objectSearchSummary = computed(() => summarizeObjectBrowserSearch(rows.value, search.value));
+const objectBrowserRecentUsageRecords = computed(() => {
+  void objectBrowserRecentUsageVersion.value;
+  return readObjectBrowserRecentUsage();
+});
 const canOpenStructureEditor = computed(() => supportsTableStructureEditing(tableStructureDatabaseType.value));
 const canOpenDiagram = computed(() => !!props.database && supportsSchemaDiagram(effectiveDatabaseType.value));
 const canOpenTableImport = computed(() => !!props.database && supportsTableImport(effectiveDatabaseType.value));
@@ -482,6 +488,8 @@ const selectableRows = computed(() => rows.value.filter((row) => row.type === "T
 // at once, which stalls the UI on schemas with thousands of objects.
 const OBJECT_GRID_MIN_CARD_WIDTH = 160; // former `minmax(160px, 1fr)` floor
 const OBJECT_GRID_GAP = 12; // 0.75rem, former grid gap (both axes)
+const OBJECT_BROWSER_RECENT_USAGE_STORAGE_KEY = "dbx:object-browser:recent-usage:v1";
+const OBJECT_BROWSER_RECENT_USAGE_LIMIT = 5000;
 // Card height is dataset-stable: if any object has timestamps/comments, every card
 // reserves those slots (even when empty) so borders stay level across a row.
 // objectGridRowHeight adapts to the dataset instead of always using the worst case.
@@ -608,6 +616,7 @@ const sortKeyOptions = computed<ObjectBrowserSortKey[]>(() => {
   const options: ObjectBrowserSortKey[] = ["name", "type", "estimatedRows", "totalBytes"];
   if (hasCreatedAt.value) options.push("created_at");
   if (hasUpdatedAt.value) options.push("updated_at");
+  options.push("lastUsedAt");
   options.push("comment");
   return options;
 });
@@ -626,6 +635,7 @@ function sortKeyLabel(key: ObjectBrowserSortKey): string {
   if (key === "totalBytes") return t("objects.size");
   if (key === "created_at") return t("objects.createdAt");
   if (key === "updated_at") return t("objects.updatedAt");
+  if (key === "lastUsedAt") return t("objects.lastUsed");
   if (key === "comment") return t("objects.comment");
   return key;
 }
@@ -712,8 +722,67 @@ function canonicalizeObjectBrowserPinnedIdentity(identity: PinnedTreeNodeIdentit
   return canonicalizeObjectBrowserPinnedTreeNodeIdentity(objectBrowserPinnedTreeNodeContext())(identity);
 }
 
+function objectBrowserRecentUsageStorage(): Storage | null {
+  if (typeof window === "undefined") return null;
+  try {
+    return window.localStorage;
+  } catch {
+    return null;
+  }
+}
+
+function readObjectBrowserRecentUsage(): ObjectBrowserRecentUsageRecord {
+  const storage = objectBrowserRecentUsageStorage();
+  if (!storage) return {};
+  try {
+    const decoded = JSON.parse(storage.getItem(OBJECT_BROWSER_RECENT_USAGE_STORAGE_KEY) || "{}");
+    if (!decoded || typeof decoded !== "object" || Array.isArray(decoded)) return {};
+    const records: ObjectBrowserRecentUsageRecord = {};
+    for (const [key, value] of Object.entries(decoded)) {
+      if (typeof value === "number" && Number.isFinite(value)) records[key] = value;
+    }
+    return records;
+  } catch {
+    return {};
+  }
+}
+
+function writeObjectBrowserRecentUsage(records: ObjectBrowserRecentUsageRecord) {
+  const storage = objectBrowserRecentUsageStorage();
+  if (!storage) return;
+  try {
+    storage.setItem(OBJECT_BROWSER_RECENT_USAGE_STORAGE_KEY, JSON.stringify(records));
+  } catch {
+    // Ignore private-mode and quota failures; recent-use sorting is best-effort.
+  }
+}
+
+function objectBrowserRecentUsageKey(row: ObjectBrowserRow): string {
+  const context = objectBrowserPinnedTreeNodeContext();
+  const identity = canonicalizeObjectBrowserPinnedTreeNodeIdentity(context)(objectBrowserRowPinnedTreeNodeIdentity(row, context));
+  return [identity.connectionId, identity.catalog || "", identity.database, identity.schema || "", identity.type, identity.name, identity.signature || ""].join("\0");
+}
+
+function objectBrowserRowsWithRecentUsage(items: ObjectBrowserRow[]): ObjectBrowserRow[] {
+  const usage = objectBrowserRecentUsageRecords.value;
+  return items.map((row) => ({ ...row, lastUsedAt: usage[objectBrowserRecentUsageKey(row)] ?? null }));
+}
+
+function markObjectBrowserRowUsed(row: ObjectBrowserRow) {
+  const key = objectBrowserRecentUsageKey(row);
+  const records = readObjectBrowserRecentUsage();
+  records[key] = Date.now();
+  const trimmed = Object.fromEntries(
+    Object.entries(records)
+      .sort(([, left], [, right]) => right - left)
+      .slice(0, OBJECT_BROWSER_RECENT_USAGE_LIMIT),
+  );
+  writeObjectBrowserRecentUsage(trimmed);
+  objectBrowserRecentUsageVersion.value += 1;
+}
+
 function sortObjectBrowserRowsWithPins(items: ObjectBrowserRow[]): ObjectBrowserRow[] {
-  const sorted = sortObjectBrowserRows(items, sortKey.value, sortDirection.value);
+  const sorted = sortObjectBrowserRows(objectBrowserRowsWithRecentUsage(items), sortKey.value, sortDirection.value);
   const context = objectBrowserPinnedTreeNodeContext();
   return connectionStore.orderByPinnedTreeNodes(sorted, (row, identity) => objectBrowserRowMatchesPinnedTreeNode(row, identity, context));
 }
@@ -824,6 +893,7 @@ function executeRowAction(row: ObjectBrowserRow, action: ObjectBrowserRowAction)
       void openTableInfo(row);
       break;
     case "open-table":
+      markObjectBrowserRowUsed(row);
       emit("openTable", { tableName: row.name, schema: row.schema, catalog: props.catalog });
       break;
     case "open-source":
@@ -922,6 +992,7 @@ async function openTableInfo(row: ObjectBrowserRow, initialTab?: TableInfoTab) {
     closeSidePanel();
     return;
   }
+  markObjectBrowserRowUsed(row);
   sidePanelRow.value = row;
   sidePanelMode.value = "table-info";
   sidePanelGuard.bump();
@@ -1091,6 +1162,7 @@ const canOpenTableStructureEditor = computed(() => sidePanelRow.value?.type === 
 function openTableStructureEditor() {
   const row = sidePanelRow.value;
   if (!row || row.type !== "TABLE" || !canOpenTableStructureEditor.value) return;
+  markObjectBrowserRowUsed(row);
   queryStore.openTableStructure(props.connection.id, props.database, row.schema || selectedSchema.value, row.name, tableInfoTab.value, undefined, props.catalog);
 }
 
@@ -1100,6 +1172,7 @@ async function openSource(row: ObjectBrowserRow) {
     closeSidePanel();
     return;
   }
+  markObjectBrowserRowUsed(row);
   // Starting a different object must invalidate slower source requests before
   // any state is reset, otherwise an old response can populate the new row.
   const epoch = sidePanelGuard.start();
@@ -1149,6 +1222,7 @@ async function openSource(row: ObjectBrowserRow) {
 }
 
 async function openNewQuery(row: ObjectBrowserRow) {
+  markObjectBrowserRowUsed(row);
   const tabId = queryStore.createTab(props.connection.id, props.database, row.name);
   queryStore.updateSql(
     tabId,
@@ -1164,6 +1238,7 @@ async function openNewQuery(row: ObjectBrowserRow) {
 
 function openProcedureExecution(row: ObjectBrowserRow) {
   if (row.type !== "PROCEDURE") return;
+  markObjectBrowserRowUsed(row);
   procedureExecutionTarget.value = row;
   showProcedureExecutionConfirm.value = true;
 }
@@ -1399,11 +1474,13 @@ async function saveFileContent(content: string, defaultFileName: string, filterN
 }
 
 function openViewData(row: ObjectBrowserRow) {
+  markObjectBrowserRowUsed(row);
   emit("openTable", { tableName: row.name, schema: row.schema, tableType: row.type, catalog: props.catalog });
 }
 
 function openStructureEditor(row: ObjectBrowserRow) {
   if (row.type !== "TABLE") return;
+  markObjectBrowserRowUsed(row);
   queryStore.openTableStructure(props.connection.id, props.database, row.schema || selectedSchema.value, row.name, undefined, undefined, props.catalog);
 }
 
@@ -1427,6 +1504,7 @@ function closeDroppedTableObjectTabsForRow(row: ObjectBrowserRow) {
 }
 
 function openDiagram(row: ObjectBrowserRow) {
+  markObjectBrowserRowUsed(row);
   connectionStore.diagramSource = {
     connectionId: props.connection.id,
     database: props.database,
@@ -1437,6 +1515,7 @@ function openDiagram(row: ObjectBrowserRow) {
 
 function openTableImport(row: ObjectBrowserRow) {
   if (row.type !== "TABLE") return;
+  markObjectBrowserRowUsed(row);
   connectionStore.tableImportSource = {
     connectionId: props.connection.id,
     database: props.database,
@@ -1446,6 +1525,7 @@ function openTableImport(row: ObjectBrowserRow) {
 }
 
 function openDataCompare(row: ObjectBrowserRow) {
+  markObjectBrowserRowUsed(row);
   connectionStore.dataCompareSource = {
     connectionId: props.connection.id,
     database: props.database,
@@ -1455,6 +1535,7 @@ function openDataCompare(row: ObjectBrowserRow) {
 }
 
 function openDatabaseExport(row: ObjectBrowserRow) {
+  markObjectBrowserRowUsed(row);
   connectionStore.databaseExportSource = {
     connectionId: props.connection.id,
     database: props.database,

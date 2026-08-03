@@ -260,6 +260,26 @@ test("object browser rows sort estimated rows and table size with empty values l
   );
 });
 
+test("object browser rows sort recently used objects with unused values last", () => {
+  const rows = buildObjectBrowserRows({
+    objects: [
+      { name: "unused", object_type: "TABLE", schema: "public" },
+      { name: "older", object_type: "TABLE", schema: "public" },
+      { name: "newer", object_type: "TABLE", schema: "public" },
+    ],
+    database: "app",
+    fallbackSchema: "public",
+    needsSchema: true,
+  });
+  rows.find((row) => row.name === "older")!.lastUsedAt = 1000;
+  rows.find((row) => row.name === "newer")!.lastUsedAt = 2000;
+
+  assert.deepEqual(
+    sortObjectBrowserRows(rows, "lastUsedAt", "desc").map((row) => row.name),
+    ["newer", "older", "unused"],
+  );
+});
+
 test("object browser formats statistics for compact table cells", () => {
   assert.equal(formatObjectBrowserCount(1234567), "1,234,567");
   assert.equal(formatObjectBrowserBytes(1536), "1.50 KB");

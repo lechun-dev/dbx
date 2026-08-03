@@ -2505,6 +2505,7 @@ export default {
     statisticsHint: "Estimated from database statistics; no COUNT(*) is executed.",
     createdAt: "Created",
     updatedAt: "Updated",
+    lastUsed: "Last used",
     source: "Source",
     saveSource: "Save",
     cancelEdit: "Cancel",

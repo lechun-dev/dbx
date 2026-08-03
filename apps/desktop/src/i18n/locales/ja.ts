@@ -2391,6 +2391,7 @@ export default withEnglishFallback({
     statisticsHint: "データベース統計からの推定値です。COUNT(*) は実行しません。",
     createdAt: "作成日時",
     updatedAt: "更新日時",
+    lastUsed: "最近使用",
     source: "ソース",
     saveSource: "保存",
     cancelEdit: "キャンセル",

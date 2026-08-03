@@ -20,9 +20,10 @@ export type ObjectBrowserRow = {
   partitionParentName?: string;
   estimatedRows?: number | null;
   totalBytes?: number | null;
+  lastUsedAt?: number | null;
 };
 
-export type ObjectBrowserSortKey = "name" | "type" | "estimatedRows" | "totalBytes" | "created_at" | "updated_at" | "comment";
+export type ObjectBrowserSortKey = "name" | "type" | "estimatedRows" | "totalBytes" | "created_at" | "updated_at" | "lastUsedAt" | "comment";
 export type ObjectBrowserSortDirection = "asc" | "desc";
 export type ObjectBrowserFilter = "all" | ObjectBrowserObjectType;
 export type ObjectBrowserFilterCounts = Record<ObjectBrowserFilter, number>;
@@ -282,7 +283,7 @@ export function sortObjectBrowserRows(rows: ObjectBrowserRow[], key: ObjectBrows
 }
 
 export function initialObjectBrowserSortDirection(key: ObjectBrowserSortKey): ObjectBrowserSortDirection {
-  return key === "created_at" || key === "updated_at" || key === "estimatedRows" || key === "totalBytes" ? "desc" : "asc";
+  return key === "created_at" || key === "updated_at" || key === "lastUsedAt" || key === "estimatedRows" || key === "totalBytes" ? "desc" : "asc";
 }
 
 export function formatObjectBrowserTimestamp(value: string | null | undefined): string {
@@ -313,7 +314,7 @@ export function formatObjectBrowserBytes(value: number | null | undefined): stri
 }
 
 function compareObjectBrowserValue(left: string | number | null | undefined, right: string | number | null | undefined, key: ObjectBrowserSortKey, direction: ObjectBrowserSortDirection): number {
-  if (key === "estimatedRows" || key === "totalBytes") {
+  if (key === "estimatedRows" || key === "totalBytes" || key === "lastUsedAt") {
     return compareObjectBrowserNumber(left, right, direction);
   }
   const leftText = normalizeSortValue(left);
